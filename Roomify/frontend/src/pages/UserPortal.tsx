@@ -21,6 +21,20 @@ import { API_BASE_URL } from '../config/api';
 import { readApiResponse } from '../utils/apiResponse';
 import { offers } from '../data/luxuryHotel';
 
+type BookingAddonId = 'airport' | 'breakfast' | 'spa';
+const addonOptions: { id: BookingAddonId; title: string; price: number }[] = [
+  { id: 'airport', title: 'Airport Transfer', price: 1800 },
+  { id: 'breakfast', title: 'Chef Breakfast', price: 1200 },
+  { id: 'spa', title: 'Spa Welcome Ritual', price: 2500 }
+];
+
+const nightsBetween = (checkIn: string, checkOut: string) => {
+  const start = new Date(checkIn).getTime();
+  const end = new Date(checkOut).getTime();
+  if (Number.isNaN(start) || Number.isNaN(end)) return 1;
+  return Math.max(1, Math.ceil((end - start) / 86400000));
+};
+
 interface GuestProfile {
   guest_id: number;
   name: string;
@@ -47,6 +61,16 @@ interface Booking {
   status: string;
   nights: number;
   estimated_total: string | number;
+}
+
+interface PendingPublicBooking {
+  room_id?: number;
+  roomType?: string;
+  check_in?: string;
+  check_out?: string;
+  addons?: BookingAddonId[];
+  offer?: string;
+  promo?: string;
 }
 
 interface Invoice {
@@ -150,6 +174,10 @@ export const UserPortal: React.FC = () => {
   const [savedOffers, setSavedOffers] = useState<SavedOffer[]>([]);
   const [selectedRoom, setSelectedRoom] = useState<Room | null>(null);
   const [rebooking, setRebooking] = useState<Booking | null>(null);
+  const [bookingStep, setBookingStep] = useState(1);
+  const [bookingAddons, setBookingAddons] = useState<BookingAddonId[]>([]);
+  const [bookingOffer, setBookingOffer] = useState('');
+  const [bookingPromo, setBookingPromo] = useState('');
   const [bookingDates, setBookingDates] = useState({
     check_in: getDateInputValue(0),
     check_out: getDateInputValue(1)
@@ -175,10 +203,14 @@ export const UserPortal: React.FC = () => {
     setStatusMsg('');
 
     try {
+      const dateParams = new URLSearchParams({
+        check_in: bookingDates.check_in,
+        check_out: bookingDates.check_out
+      });
       const [profileResponse, roomsResponse, bookingsResponse, membershipResponse, invoicesResponse, preferencesResponse] =
         await Promise.all([
           fetch(`${API_BASE_URL}/api/user/profile`, { headers: authHeaders() }),
-          fetch(`${API_BASE_URL}/api/user/rooms/available`, { headers: authHeaders() }),
+          fetch(`${API_BASE_URL}/api/user/rooms/available?${dateParams.toString()}`, { headers: authHeaders() }),
           fetch(`${API_BASE_URL}/api/user/bookings`, { headers: authHeaders() }),
           fetch(`${API_BASE_URL}/api/user/membership`, { headers: authHeaders() }),
           fetch(`${API_BASE_URL}/api/user/invoices`, { headers: authHeaders() }),
@@ -220,11 +252,44 @@ export const UserPortal: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [authHeaders, handleLogout]);
+  }, [authHeaders, handleLogout, bookingDates.check_in, bookingDates.check_out]);
 
   useEffect(() => {
     fetchPortalData();
   }, [fetchPortalData]);
+
+  // If the guest started booking from the public preview page, open the same booking flow here.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('pendingPublicBooking');
+      if (!raw) return;
+
+      const pending = JSON.parse(raw) as PendingPublicBooking;
+      const nextCheckIn = pending.check_in || bookingDates.check_in;
+      const nextCheckOut = pending.check_out || bookingDates.check_out;
+      setBookingDates({ check_in: nextCheckIn, check_out: nextCheckOut });
+
+      const desiredRoom =
+        (pending.room_id ? rooms.find((r) => r.room_id === pending.room_id) : null) ||
+        (pending.roomType ? rooms.find((r) => r.type === pending.roomType) : null) ||
+        rooms[0] ||
+        null;
+
+      if (desiredRoom) {
+        setSelectedRoom(desiredRoom);
+        setBookingStep(1);
+        setBookingAddons(Array.isArray(pending.addons) ? pending.addons : []);
+        setBookingOffer(typeof pending.offer === 'string' ? pending.offer : '');
+        setBookingPromo(typeof pending.promo === 'string' ? pending.promo : '');
+      }
+
+      // Clear after consuming so it doesn't keep popping up.
+      localStorage.removeItem('pendingPublicBooking');
+    } catch {
+      localStorage.removeItem('pendingPublicBooking');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rooms]);
 
   const activeBookings = useMemo(
     () =>
@@ -287,6 +352,10 @@ export const UserPortal: React.FC = () => {
       });
       setStatusMsg(data.message || 'Room booked successfully.');
       setSelectedRoom(null);
+      setBookingStep(1);
+      setBookingAddons([]);
+      setBookingOffer('');
+      setBookingPromo('');
       await fetchPortalData();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Could not complete your booking.';
@@ -386,6 +455,16 @@ export const UserPortal: React.FC = () => {
     );
   }
 
+  const nights = nightsBetween(bookingDates.check_in, bookingDates.check_out);
+  const selectedNightly = selectedRoom ? Number(selectedRoom.price_per_night) : 0;
+  const addonTotal = addonOptions
+    .filter((addon) => bookingAddons.includes(addon.id))
+    .reduce((sum, addon) => sum + addon.price, 0);
+  const subtotal = selectedNightly * nights + addonTotal;
+  const discount = bookingPromo.trim().toUpperCase() === 'LUXE15' || bookingOffer ? Math.round(subtotal * 0.15) : 0;
+  const taxes = Math.round((subtotal - discount) * 0.12);
+  const grandTotal = subtotal - discount + taxes;
+
   return (
     <div className="min-h-screen bg-[#070605] text-[#f8f1e7]">
       <header className="sticky top-0 z-30 bg-black/75 backdrop-blur-3xl border-b border-white/10">
@@ -471,8 +550,31 @@ export const UserPortal: React.FC = () => {
           <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
             <div>
               <h2 className="text-4xl font-luxury font-black text-white">Available Rooms</h2>
-              <p className="text-white/50 font-medium mt-1">Choose a room, save it, or confirm your stay dates.</p>
+              <p className="text-white/50 font-medium mt-1">These rooms are filtered for your selected check-in / check-out dates.</p>
             </div>
+          </div>
+
+          <div className="mb-6 grid grid-cols-1 gap-4 rounded-[24px] border border-white/10 bg-white/[0.06] p-5 md:grid-cols-2">
+            <label className="block">
+              <span className="text-xs font-black uppercase tracking-widest text-white/45">Check-in</span>
+              <input
+                type="date"
+                name="check_in"
+                value={bookingDates.check_in}
+                onChange={handleBookingDateChange}
+                className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 font-bold text-white outline-none"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs font-black uppercase tracking-widest text-white/45">Check-out</span>
+              <input
+                type="date"
+                name="check_out"
+                value={bookingDates.check_out}
+                onChange={handleBookingDateChange}
+                className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 font-bold text-white outline-none"
+              />
+            </label>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
@@ -508,7 +610,10 @@ export const UserPortal: React.FC = () => {
                       <span className="text-xl text-[#e7c987] font-black">Rs {formatCurrency(room.price_per_night)}</span>
                     </div>
                     <button
-                      onClick={() => setSelectedRoom(room)}
+                      onClick={() => {
+                        setSelectedRoom(room);
+                        setBookingStep(1);
+                      }}
                       className="w-full py-3 bg-[#d6b16a] text-black rounded-2xl font-black hover:bg-[#f0d28d] transition-all active:scale-[0.98]"
                     >
                       Book This Room
@@ -546,16 +651,203 @@ export const UserPortal: React.FC = () => {
       </main>
 
       {selectedRoom && (
-        <BookingModal
-          title={`Room ${selectedRoom.room_number}`}
-          subtitle={`${selectedRoom.type} room at Rs ${formatCurrency(selectedRoom.price_per_night)} per night`}
-          dates={bookingDates}
-          onDateChange={handleBookingDateChange}
-          onClose={() => setSelectedRoom(null)}
-          onSubmit={handleBookRoom}
-          isWorking={isWorking}
-          submitLabel="Confirm"
-        />
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="w-full max-w-3xl rounded-[28px] border border-white/10 bg-[#11100e] p-6 shadow-2xl">
+            <div className="mb-6 flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-black uppercase tracking-widest text-[#e7c987] mb-2">Booking Flow</p>
+                <h2 className="text-3xl font-luxury font-black text-white">
+                  Room {selectedRoom.room_number} • {selectedRoom.type}
+                </h2>
+                <p className="text-white/55 font-bold">
+                  Rs {formatCurrency(selectedRoom.price_per_night)} / night • {nights} night(s)
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedRoom(null);
+                  setBookingStep(1);
+                }}
+                aria-label="Close booking"
+                className="rounded-full bg-white/10 p-2 text-white/70"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="mb-6 grid grid-cols-5 gap-2">
+              {['Dates', 'Add-ons', 'Offers', 'Payment', 'Confirm'].map((label, index) => (
+                <div key={label} className="min-w-0">
+                  <div className={`h-1.5 rounded-full ${bookingStep >= index + 1 ? 'bg-[#d6b16a]' : 'bg-white/12'}`} />
+                  <p className="mt-2 truncate text-xs font-bold text-white/45">{label}</p>
+                </div>
+              ))}
+            </div>
+
+            <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+              <div className="min-h-[240px]">
+                {bookingStep === 1 && (
+                  <form onSubmit={(e) => { e.preventDefault(); setBookingStep(2); }} className="space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <label className="block">
+                        <span className="text-xs font-black uppercase text-white/45">Check-in</span>
+                        <input
+                          required
+                          type="date"
+                          name="check_in"
+                          value={bookingDates.check_in}
+                          onChange={handleBookingDateChange}
+                          className="mt-2 w-full rounded-2xl border border-white/10 bg-white/[0.06] px-4 py-3 font-bold text-white outline-none"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-xs font-black uppercase text-white/45">Check-out</span>
+                        <input
+                          required
+                          type="date"
+                          name="check_out"
+                          value={bookingDates.check_out}
+                          onChange={handleBookingDateChange}
+                          className="mt-2 w-full rounded-2xl border border-white/10 bg-white/[0.06] px-4 py-3 font-bold text-white outline-none"
+                        />
+                      </label>
+                    </div>
+                    <button className="w-full rounded-2xl bg-[#d6b16a] py-4 font-black text-black">
+                      Continue
+                    </button>
+                  </form>
+                )}
+
+                {bookingStep === 2 && (
+                  <div>
+                    <h3 className="font-luxury text-2xl text-white">Select add-ons</h3>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                      {addonOptions.map((addon) => {
+                        const active = bookingAddons.includes(addon.id);
+                        return (
+                          <button
+                            key={addon.id}
+                            type="button"
+                            onClick={() =>
+                              setBookingAddons((current) =>
+                                active ? current.filter((id) => id !== addon.id) : [...current, addon.id]
+                              )
+                            }
+                            className={`rounded-2xl border p-4 text-left transition ${
+                              active ? 'border-[#d6b16a] bg-[#d6b16a]/15' : 'border-white/10 bg-white/[0.05]'
+                            }`}
+                          >
+                            <p className="font-black text-white">{addon.title}</p>
+                            <p className="mt-1 text-sm font-bold text-white/45">Rs {formatCurrency(addon.price)}</p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {bookingStep === 3 && (
+                  <div className="space-y-4">
+                    <h3 className="font-luxury text-2xl text-white">Offers & promo</h3>
+                    <input
+                      value={bookingPromo}
+                      onChange={(e) => setBookingPromo(e.target.value)}
+                      placeholder="Promo code (try LUXE15)"
+                      className="w-full rounded-2xl border border-white/10 bg-white/[0.06] px-5 py-4 font-bold text-white outline-none placeholder:text-white/35"
+                    />
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {offers.slice(0, 4).map((offer) => (
+                        <button
+                          key={offer.title}
+                          type="button"
+                          onClick={() => setBookingOffer((current) => (current === offer.title ? '' : offer.title))}
+                          className={`rounded-2xl border p-4 text-left ${
+                            bookingOffer === offer.title ? 'border-[#d6b16a] bg-[#d6b16a]/15' : 'border-white/10 bg-white/[0.05]'
+                          }`}
+                        >
+                          <p className="font-black text-white">{offer.title}</p>
+                          <p className="mt-1 text-sm font-bold text-[#e7c987]">{offer.discount}</p>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {bookingStep === 4 && (
+                  <div className="rounded-3xl border border-white/10 bg-white/[0.05] p-5">
+                    <h3 className="font-luxury text-2xl text-white">Payment</h3>
+                    <p className="mt-2 leading-7 text-white/55">
+                      Demo payment step. Your booking will still be created against live availability.
+                    </p>
+                  </div>
+                )}
+
+                {bookingStep === 5 && (
+                  <div className="rounded-3xl border border-[#d6b16a]/25 bg-[#d6b16a]/10 p-6 text-center">
+                    <ShieldCheck className="mx-auto mb-4 h-10 w-10 text-[#e7c987]" />
+                    <h3 className="font-luxury text-3xl text-white">Ready to confirm</h3>
+                    <p className="mt-2 text-white/62">We’ll reserve the room for your dates if it’s still available.</p>
+                  </div>
+                )}
+              </div>
+
+              <aside className="rounded-[24px] border border-white/10 bg-black/35 p-5">
+                <h3 className="font-luxury text-2xl text-white">Price Summary</h3>
+                <div className="mt-4 flex justify-between text-sm">
+                  <span className="font-bold text-white/45">{nights} night room total</span>
+                  <span className="font-black text-white">Rs {formatCurrency(selectedNightly * nights)}</span>
+                </div>
+                <div className="mt-3 flex justify-between text-sm">
+                  <span className="font-bold text-white/45">Add-ons</span>
+                  <span className="font-black text-white">Rs {formatCurrency(addonTotal)}</span>
+                </div>
+                <div className="mt-3 flex justify-between text-sm">
+                  <span className="font-bold text-white/45">Discount</span>
+                  <span className="font-black text-white">- Rs {formatCurrency(discount)}</span>
+                </div>
+                <div className="mt-3 flex justify-between text-sm">
+                  <span className="font-bold text-white/45">Taxes</span>
+                  <span className="font-black text-white">Rs {formatCurrency(taxes)}</span>
+                </div>
+                <div className="mt-5 border-t border-white/10 pt-4 flex justify-between">
+                  <span className="font-bold text-white/55">Final total</span>
+                  <span className="text-xl font-black text-[#e7c987]">Rs {formatCurrency(grandTotal)}</span>
+                </div>
+              </aside>
+            </div>
+
+            <div className="mt-6 flex justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => setBookingStep((s) => Math.max(1, s - 1))}
+                disabled={bookingStep === 1 || isWorking}
+                className="rounded-2xl border border-white/12 px-6 py-3 font-bold text-white/65 disabled:opacity-40"
+              >
+                Back
+              </button>
+              {bookingStep < 5 ? (
+                <button
+                  type="button"
+                  onClick={() => setBookingStep((s) => Math.min(5, s + 1))}
+                  disabled={isWorking}
+                  className="rounded-2xl bg-[#d6b16a] px-6 py-3 font-black text-black disabled:opacity-60"
+                >
+                  Continue
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={(e) => void handleBookRoom(e as unknown as React.FormEvent)}
+                  disabled={isWorking}
+                  className="rounded-2xl bg-[#d6b16a] px-6 py-3 font-black text-black disabled:opacity-60"
+                >
+                  Confirm Booking
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
       )}
 
       {rebooking && (

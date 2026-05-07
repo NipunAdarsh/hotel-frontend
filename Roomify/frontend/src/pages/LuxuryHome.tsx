@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   ArrowRight,
@@ -19,7 +19,7 @@ import {
   Star,
   X
 } from 'lucide-react';
-import { experiences, luxuryRooms, offers as fallbackOffers, testimonials, type LuxuryRoom } from '../data/luxuryHotel';
+import { experiences, offers as fallbackOffers, testimonials, type LuxuryRoom } from '../data/luxuryHotel';
 import { API_BASE_URL } from '../config/api';
 import { readApiResponse } from '../utils/apiResponse';
 
@@ -130,12 +130,13 @@ const nightsBetween = (checkIn: string, checkOut: string) => {
 
 export const LuxuryHome: React.FC = () => {
   const navigate = useNavigate();
+  const roomsSectionRef = useRef<HTMLElement | null>(null);
   const [scrolled, setScrolled] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [draft, setDraft] = useState<BookingDraft>(getInitialDraft);
   const [roomFilter, setRoomFilter] = useState({ type: 'Any', capacity: 1, maxPrice: 35000 });
   const [loadingRooms, setLoadingRooms] = useState(true);
-  const [publicRooms, setPublicRooms] = useState<LuxuryRoom[]>(luxuryRooms);
+  const [publicRooms, setPublicRooms] = useState<LuxuryRoom[]>([]);
   const [publicOffers, setPublicOffers] = useState<OfferView[]>(fallbackOfferViews);
   const [selectedRoom, setSelectedRoom] = useState<LuxuryRoom | null>(null);
   const [galleryIndex, setGalleryIndex] = useState(0);
@@ -179,9 +180,9 @@ export const LuxuryHome: React.FC = () => {
           throw new Error(('error' in data && data.error) || 'Could not load public rooms.');
         }
 
-        if (isMounted) setPublicRooms(data.length > 0 ? data : luxuryRooms);
+        if (isMounted) setPublicRooms(data);
       } catch {
-        if (isMounted) setPublicRooms(luxuryRooms);
+        if (isMounted) setPublicRooms([]);
       } finally {
         if (isMounted) setLoadingRooms(false);
       }
@@ -192,6 +193,11 @@ export const LuxuryHome: React.FC = () => {
       isMounted = false;
     };
   }, [draft.checkIn, draft.checkOut, roomFilter]);
+
+  const roomTypeOptions = useMemo(() => {
+    const types = new Set(publicRooms.map((room) => room.type).filter(Boolean));
+    return ['Any', ...Array.from(types).sort((a, b) => a.localeCompare(b))];
+  }, [publicRooms]);
 
   useEffect(() => {
     let isMounted = true;
@@ -224,32 +230,74 @@ export const LuxuryHome: React.FC = () => {
 
   const suggestedRoom = useMemo(() => {
     if (draft.roomType !== 'Any') {
-      return publicRooms.find((room) => room.type === draft.roomType) ?? publicRooms[0] ?? luxuryRooms[0];
+      return publicRooms.find((room) => room.type === draft.roomType) ?? publicRooms[0] ?? null;
     }
-    return publicRooms[0] ?? luxuryRooms[0];
+    return publicRooms[0] ?? null;
   }, [draft.roomType, publicRooms]);
 
   const activeRoom = bookingRoom ?? selectedRoom ?? suggestedRoom;
+  const safeActiveRoom = activeRoom ?? {
+    id: 'room-fallback',
+    room_id: 0,
+    room_number: '',
+    title: 'Select a room',
+    type: 'Any',
+    price: 0,
+    price_per_night: 0,
+    capacity: 1,
+    rating: 0,
+    popular: false,
+    image: '',
+    gallery: [],
+    description: '',
+    amenities: [],
+    included: [],
+    policy: '',
+    status: 'Unavailable',
+    available: false
+  };
   const nights = nightsBetween(draft.checkIn, draft.checkOut);
   const addonTotal = addonOptions
     .filter((addon) => draft.addons.includes(addon.id))
     .reduce((sum, addon) => sum + addon.price, 0);
-  const subtotal = activeRoom.price * nights + addonTotal;
+  const subtotal = safeActiveRoom.price * nights + addonTotal;
   const discount = draft.promo.trim().toUpperCase() === 'LUXE15' || draft.offer ? Math.round(subtotal * 0.15) : 0;
   const taxes = Math.round((subtotal - discount) * 0.12);
   const grandTotal = subtotal - discount + taxes;
 
   const updateDraft = (patch: Partial<BookingDraft>) => setDraft((current) => ({ ...current, ...patch }));
 
-  const openBooking = (room: LuxuryRoom = suggestedRoom) => {
+  const requireGuestAuth = (bookingIntent?: Record<string, unknown>) => {
+    const token = localStorage.getItem('guestToken');
+    if (token) return true;
+    if (bookingIntent) {
+      localStorage.setItem('pendingPublicBooking', JSON.stringify(bookingIntent));
+    }
+    navigate('/user/login', { replace: false });
+    return false;
+  };
+
+  const openBooking = (room: LuxuryRoom) => {
+    const intent = {
+      room_id: room.room_id,
+      roomType: room.type,
+      check_in: draft.checkIn,
+      check_out: draft.checkOut,
+      addons: draft.addons,
+      offer: draft.offer,
+      promo: draft.promo
+    };
+
+    if (!requireGuestAuth(intent)) return;
     setBookingRoom(room);
     setBookingStep(1);
   };
 
   const submitAvailability = (event: React.FormEvent) => {
     event.preventDefault();
-    const target = document.getElementById('rooms');
-    target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    window.setTimeout(() => {
+      roomsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 0);
   };
 
   const confirmBooking = async () => {
@@ -258,6 +306,10 @@ export const LuxuryHome: React.FC = () => {
 
     const token = localStorage.getItem('guestToken');
     const room = bookingRoom ?? suggestedRoom;
+    if (!room) {
+      setBookingNotice('No rooms are available for these filters.');
+      return;
+    }
     const bookingIntent = {
       roomType: room.type,
       check_in: draft.checkIn,
@@ -271,7 +323,7 @@ export const LuxuryHome: React.FC = () => {
 
     if (!token) {
       setBookingNotice('Login as a guest to complete this booking with live room inventory.');
-      window.setTimeout(() => navigate('/user/login'), 1300);
+      window.setTimeout(() => navigate('/user/login'), 500);
       return;
     }
 
@@ -393,7 +445,13 @@ export const LuxuryHome: React.FC = () => {
           </div>
         </section>
 
-        <section id="rooms" className="mx-auto max-w-7xl px-5 py-24 lg:px-8">
+        <section
+          id="rooms"
+          ref={(node) => {
+            roomsSectionRef.current = node;
+          }}
+          className="mx-auto max-w-7xl px-5 py-24 lg:px-8"
+        >
           <SectionHeading
             eyebrow="Room Discovery"
             title="Choose your pace of luxury."
@@ -407,7 +465,7 @@ export const LuxuryHome: React.FC = () => {
               className="rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm font-bold text-white outline-none"
               aria-label="Room type filter"
             >
-              {roomTypes.map((type) => (
+              {roomTypeOptions.map((type) => (
                 <option key={type}>{type}</option>
               ))}
             </select>
@@ -439,17 +497,24 @@ export const LuxuryHome: React.FC = () => {
           <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
             {loadingRooms
               ? Array.from({ length: 4 }).map((_, index) => <RoomSkeleton key={index} />)
-              : filteredRooms.map((room) => (
-                  <RoomCard
-                    key={room.id}
-                    room={room}
-                    onDetails={() => {
-                      setSelectedRoom(room);
-                      setGalleryIndex(0);
-                    }}
-                    onBook={() => openBooking(room)}
-                  />
-                ))}
+              : filteredRooms.length > 0
+                ? filteredRooms.map((room) => (
+                    <RoomCard
+                      key={room.id}
+                      room={room}
+                      onDetails={() => {
+                        setSelectedRoom(room);
+                        setGalleryIndex(0);
+                      }}
+                      onBook={() => openBooking(room)}
+                    />
+                  ))
+                : (
+                    <div className="md:col-span-2 xl:col-span-4 rounded-[28px] border border-white/10 bg-white/[0.04] p-10 text-center">
+                      <p className="font-black text-white text-lg">No rooms match your filters right now.</p>
+                      <p className="mt-2 text-sm font-bold text-white/45">Try changing dates, type, capacity, or max price.</p>
+                    </div>
+                  )}
           </div>
         </section>
 

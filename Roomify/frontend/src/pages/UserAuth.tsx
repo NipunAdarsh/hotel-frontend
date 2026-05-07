@@ -66,7 +66,9 @@ export const UserAuth: React.FC = () => {
       localStorage.setItem('guestRole', data.role || 'Guest');
       localStorage.setItem('guestName', data.guest.name);
 
-      navigate('/user', { replace: true });
+      // If they started booking from the public preview page, finish inside the guest portal.
+      const hasPendingBooking = Boolean(localStorage.getItem('pendingPublicBooking'));
+      navigate('/user', { replace: true, state: { openBooking: hasPendingBooking } });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to connect to the server.';
       setStatusMsg(message);
