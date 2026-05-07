@@ -90,12 +90,20 @@ export const Login: React.FC = () => {
           </button>
         </form>
 
-        <p className="mt-4 text-sm">
-          Don't have an account?{' '}
-          <Link to="/register" className="text-blue-500">
-            Register
-          </Link>
-        </p>
+        <div className="mt-5 space-y-2 text-sm">
+          <p>
+            Are you a guest?{' '}
+            <Link to="/user/login" className="text-blue-500 font-semibold">
+              Login here
+            </Link>
+          </p>
+          <p>
+            New guest?{' '}
+            <Link to="/user/register" className="text-blue-500 font-semibold">
+              Create a guest account
+            </Link>
+          </p>
+        </div>
       </main>
     </div>
   );

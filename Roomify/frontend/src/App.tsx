@@ -10,6 +10,10 @@ import { ReceptionistPortal } from './pages/ReceptionistPortal';
 import { RestaurantPOS } from './pages/RestaurantPOS';
 import { AdminRooms } from './pages/AdminRooms';
 import { ProtectedRoute } from './components/ProtectedRoute';
+import { UserAuth } from './pages/UserAuth';
+import { UserPortal } from './pages/UserPortal';
+import { UserProtectedRoute } from './components/UserProtectedRoute';
+import { LuxuryHome } from './pages/LuxuryHome';
 
 // --- THE FRONT DOOR BOUNCER ---
 // Ensures the user is logged in before loading the layout shell
@@ -24,9 +28,18 @@ export const App: React.FC = () => {
       <Routes>
         {/* PUBLIC ROUTES (No login required) */}
         <Route path="/login" element={<Login />} />
+        <Route path="/user/login" element={<UserAuth />} />
+        <Route path="/user/register" element={<UserAuth />} />
 
-        {/* DEFAULT ENTRY ROUTE (Redirects straight to login) */}
-        <Route path="/" element={<Navigate to="/login" replace />} />
+        {/* GUEST WORKSPACE */}
+        <Route path="/user" element={
+          <UserProtectedRoute>
+            <UserPortal />
+          </UserProtectedRoute>
+        } />
+
+        {/* PUBLIC HOTEL WEBSITE */}
+        <Route path="/" element={<LuxuryHome />} />
 
         {/* PROTECTED WORKSPACE (Must be logged in to see these) */}
         <Route path="/dashboard" element={
