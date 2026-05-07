@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   BedDouble,
@@ -159,6 +159,7 @@ const getDateInputValue = (offsetDays: number) => {
 
 export const UserPortal: React.FC = () => {
   const navigate = useNavigate();
+  const hasConsumedPendingIntent = useRef(false);
   const [guest, setGuest] = useState<GuestProfile | null>(null);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
@@ -260,36 +261,72 @@ export const UserPortal: React.FC = () => {
 
   // If the guest started booking from the public preview page, open the same booking flow here.
   useEffect(() => {
+    if (hasConsumedPendingIntent.current) return;
+
+    let pending: PendingPublicBooking | null = null;
     try {
       const raw = localStorage.getItem('pendingPublicBooking');
       if (!raw) return;
+      pending = JSON.parse(raw) as PendingPublicBooking;
+    } catch {
+      localStorage.removeItem('pendingPublicBooking');
+      return;
+    }
 
-      const pending = JSON.parse(raw) as PendingPublicBooking;
-      const nextCheckIn = pending.check_in || bookingDates.check_in;
-      const nextCheckOut = pending.check_out || bookingDates.check_out;
-      setBookingDates({ check_in: nextCheckIn, check_out: nextCheckOut });
+    if (!pending) return;
 
+    // Consume once to avoid overwriting user edits on subsequent refetches.
+    hasConsumedPendingIntent.current = true;
+    localStorage.removeItem('pendingPublicBooking');
+
+    setBookingDates((current) => ({
+      check_in: pending.check_in || current.check_in,
+      check_out: pending.check_out || current.check_out
+    }));
+
+    setBookingAddons(Array.isArray(pending.addons) ? pending.addons : []);
+    setBookingOffer(typeof pending.offer === 'string' ? pending.offer : '');
+    setBookingPromo(typeof pending.promo === 'string' ? pending.promo : '');
+
+    // Wait until rooms are loaded to pick a room.
+    // (This effect re-runs when rooms change, but we early-return after consumption.)
+  }, []);
+
+  useEffect(() => {
+    if (!hasConsumedPendingIntent.current) return;
+    if (selectedRoom) return;
+
+    // If we consumed intent already, attempt to auto-pick a room if one exists.
+    // Prefer same room_id or same type if present in the current availability list.
+    try {
+      const raw = localStorage.getItem('pendingPublicBookingConsumedSnapshot');
+      const snapshot = raw ? (JSON.parse(raw) as PendingPublicBooking) : null;
+      if (!snapshot) return;
       const desiredRoom =
-        (pending.room_id ? rooms.find((r) => r.room_id === pending.room_id) : null) ||
-        (pending.roomType ? rooms.find((r) => r.type === pending.roomType) : null) ||
+        (snapshot.room_id ? rooms.find((r) => r.room_id === snapshot.room_id) : null) ||
+        (snapshot.roomType ? rooms.find((r) => r.type === snapshot.roomType) : null) ||
         rooms[0] ||
         null;
-
       if (desiredRoom) {
         setSelectedRoom(desiredRoom);
         setBookingStep(1);
-        setBookingAddons(Array.isArray(pending.addons) ? pending.addons : []);
-        setBookingOffer(typeof pending.offer === 'string' ? pending.offer : '');
-        setBookingPromo(typeof pending.promo === 'string' ? pending.promo : '');
       }
-
-      // Clear after consuming so it doesn't keep popping up.
-      localStorage.removeItem('pendingPublicBooking');
     } catch {
-      localStorage.removeItem('pendingPublicBooking');
+      // ignore
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rooms]);
+  }, [rooms, selectedRoom]);
+
+  // Persist a snapshot for room auto-selection (so we don't keep reading/clearing the real key).
+  useEffect(() => {
+    if (hasConsumedPendingIntent.current) return;
+    try {
+      const raw = localStorage.getItem('pendingPublicBooking');
+      if (!raw) return;
+      localStorage.setItem('pendingPublicBookingConsumedSnapshot', raw);
+    } catch {
+      // ignore
+    }
+  }, []);
 
   const activeBookings = useMemo(
     () =>
@@ -332,8 +369,7 @@ export const UserPortal: React.FC = () => {
     }));
   };
 
-  const handleBookRoom = async (event: React.FormEvent) => {
-    event.preventDefault();
+  const confirmGuestBooking = async () => {
     const room = selectedRoom;
 
     if (!room) {
@@ -348,7 +384,10 @@ export const UserPortal: React.FC = () => {
       const data = await requestJson<{ message?: string }>('/api/user/bookings', {
         room_id: room.room_id,
         check_in: bookingDates.check_in,
-        check_out: bookingDates.check_out
+        check_out: bookingDates.check_out,
+        promo_code: bookingPromo.trim() || undefined,
+        offer: bookingOffer.trim() || undefined,
+        addons: bookingAddons
       });
       setStatusMsg(data.message || 'Room booked successfully.');
       setSelectedRoom(null);
@@ -838,7 +877,7 @@ export const UserPortal: React.FC = () => {
               ) : (
                 <button
                   type="button"
-                  onClick={(e) => void handleBookRoom(e as unknown as React.FormEvent)}
+                  onClick={() => void confirmGuestBooking()}
                   disabled={isWorking}
                   className="rounded-2xl bg-[#d6b16a] px-6 py-3 font-black text-black disabled:opacity-60"
                 >
