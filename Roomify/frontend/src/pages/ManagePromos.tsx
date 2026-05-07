@@ -19,7 +19,7 @@ interface Promo {
 const defaultForm = {
   promo_code: '',
   title: '',
-  discount_type: 'PERCENT' as const,
+ discount_type: 'PERCENT' as 'PERCENT' | 'FIXED',
   discount_value: 15,
   max_uses: '',
   starts_at: '',
