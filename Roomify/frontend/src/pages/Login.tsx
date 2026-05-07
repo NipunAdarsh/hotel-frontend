@@ -1,6 +1,7 @@
 import { jwtDecode } from 'jwt-decode';
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { API_BASE_URL } from '../config/api';
 
 export const Login: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -15,7 +16,7 @@ export const Login: React.FC = () => {
 
     try {
       const response = await fetch(
-        'https://hotel-management-system-1-ejha.onrender.com/api/auth/login',
+        `${API_BASE_URL}/api/auth/login`,
         {
           method: 'POST',
           headers: {

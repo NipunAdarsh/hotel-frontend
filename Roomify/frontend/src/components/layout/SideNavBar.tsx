@@ -105,6 +105,10 @@ export const SideNavBar: React.FC<SideNavBarProps> = ({ isOpen, onClose }) => {
               <span className="material-symbols-outlined">sell</span>
               <span className="font-body">Promo Codes</span>
             </NavLink>
+            <NavLink to="/dashboard/dining" className={getNavLinkClass} onClick={onClose}>
+              <span className="material-symbols-outlined">restaurant_menu</span>
+              <span className="font-body">Dining Highlights</span>
+            </NavLink>
             <NavLink to="/dashboard/staff" className={getNavLinkClass} onClick={onClose}>
               <span className="material-symbols-outlined">badge</span>
               <span className="font-body">Manage Staff</span>

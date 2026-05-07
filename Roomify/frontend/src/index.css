@@ -5,6 +5,16 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer components {
+  .room-admin-input {
+    @apply w-full rounded-xl border border-primary/10 bg-surface-variant/30 px-4 py-3 font-bold text-primary outline-none transition focus:ring-2 focus:ring-secondary/20;
+  }
+
+  .room-admin-textarea {
+    @apply min-h-[96px] w-full resize-y rounded-xl border border-primary/10 bg-surface-variant/30 px-4 py-3 font-semibold text-primary outline-none transition focus:ring-2 focus:ring-secondary/20;
+  }
+}
+
 body {
   font-family: "Plus Jakarta Sans", sans-serif;
 }

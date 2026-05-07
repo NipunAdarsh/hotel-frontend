@@ -13,13 +13,14 @@ import {
   IndianRupee,
   LogOut,
   Repeat2,
+  ShieldCheck,
   Sparkles,
   UserRound,
   X
 } from 'lucide-react';
 import { API_BASE_URL } from '../config/api';
 import { readApiResponse } from '../utils/apiResponse';
-import { offers } from '../data/luxuryHotel';
+import { offers as fallbackOffers } from '../data/luxuryHotel';
 
 type BookingAddonId = 'airport' | 'breakfast' | 'spa';
 const addonOptions: { id: BookingAddonId; title: string; price: number }[] = [
@@ -111,6 +112,29 @@ interface SavedOffer {
   created_at?: string;
 }
 
+interface ApiOffer {
+  offer_code: string;
+  title: string;
+  tag: string;
+  discount_label: string;
+  discount_type?: string;
+  discount_value?: number;
+  description: string;
+  starts_at?: string | null;
+  ends_at: string | null;
+}
+
+interface OfferView {
+  offer_code: string;
+  title: string;
+  tag: string;
+  discount_type: 'PERCENT' | 'FIXED';
+  discount_value: number;
+  discount_label: string;
+  ends: string;
+  copy: string;
+}
+
 interface PreferencesResponse {
   preferences: GuestPreferences;
   savedRooms: Room[];
@@ -179,6 +203,7 @@ export const UserPortal: React.FC = () => {
   const [bookingAddons, setBookingAddons] = useState<BookingAddonId[]>([]);
   const [bookingOffer, setBookingOffer] = useState('');
   const [bookingPromo, setBookingPromo] = useState('');
+  const [bookingOffers, setBookingOffers] = useState<OfferView[]>([]);
   const [bookingDates, setBookingDates] = useState({
     check_in: getDateInputValue(0),
     check_out: getDateInputValue(1)
@@ -258,6 +283,58 @@ export const UserPortal: React.FC = () => {
   useEffect(() => {
     fetchPortalData();
   }, [fetchPortalData]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const normalizeOffer = (offer: ApiOffer): OfferView => {
+      const normalizedType = String(offer.discount_type || '').toUpperCase() === 'FIXED' ? 'FIXED' : 'PERCENT';
+      const value = Number(offer.discount_value || 0);
+      return {
+        offer_code: offer.offer_code,
+        title: offer.title,
+        tag: offer.tag,
+        discount_type: normalizedType,
+        discount_value: Number.isFinite(value) ? value : 0,
+        discount_label: offer.discount_label,
+        ends: offer.ends_at
+          ? `Ends ${new Date(offer.ends_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`
+          : 'Limited slots',
+        copy: offer.description
+      };
+    };
+
+    const fetchOffers = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/public/offers`);
+        const data = await readApiResponse<ApiOffer[] | { error?: string }>(response);
+        if (!response.ok || !Array.isArray(data)) {
+          throw new Error(('error' in data && data.error) || 'Could not load offers.');
+        }
+        if (!mounted) return;
+        setBookingOffers(data.map(normalizeOffer));
+      } catch {
+        if (!mounted) return;
+        // fallback to static UI offers so the page never breaks
+        const fallback: OfferView[] = fallbackOffers.slice(0, 6).map((offer) => ({
+          offer_code: offer.title.toLowerCase().replace(/\s+/g, '-'),
+          title: offer.title,
+          tag: offer.tag,
+          discount_type: 'PERCENT',
+          discount_value: 15,
+          discount_label: offer.discount,
+          ends: offer.ends,
+          copy: offer.copy
+        }));
+        setBookingOffers(fallback);
+      }
+    };
+
+    fetchOffers();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   // If the guest started booking from the public preview page, open the same booking flow here.
   useEffect(() => {
@@ -500,7 +577,18 @@ export const UserPortal: React.FC = () => {
     .filter((addon) => bookingAddons.includes(addon.id))
     .reduce((sum, addon) => sum + addon.price, 0);
   const subtotal = selectedNightly * nights + addonTotal;
-  const discount = bookingPromo.trim().toUpperCase() === 'LUXE15' || bookingOffer ? Math.round(subtotal * 0.15) : 0;
+  const selectedOffer = bookingOffers.find((offer) => offer.title === bookingOffer) || null;
+  const promoDiscountPercent = bookingPromo.trim().toUpperCase() === 'LUXE15' ? 15 : 0;
+
+  const offerDiscount = selectedOffer
+    ? selectedOffer.discount_type === 'FIXED'
+      ? Math.round(selectedOffer.discount_value)
+      : Math.round((subtotal * selectedOffer.discount_value) / 100)
+    : 0;
+
+  const promoDiscount = promoDiscountPercent ? Math.round((subtotal * promoDiscountPercent) / 100) : 0;
+  // Do not stack promo + offer: prefer explicit offer selection, else promo.
+  const discount = Math.min(subtotal, selectedOffer ? offerDiscount : promoDiscount);
   const taxes = Math.round((subtotal - discount) * 0.12);
   const grandTotal = subtotal - discount + taxes;
 
@@ -796,17 +884,22 @@ export const UserPortal: React.FC = () => {
                       className="w-full rounded-2xl border border-white/10 bg-white/[0.06] px-5 py-4 font-bold text-white outline-none placeholder:text-white/35"
                     />
                     <div className="grid gap-3 sm:grid-cols-2">
-                      {offers.slice(0, 4).map((offer) => (
+                      {bookingOffers.slice(0, 6).map((offer) => (
                         <button
-                          key={offer.title}
+                          key={offer.offer_code}
                           type="button"
-                          onClick={() => setBookingOffer((current) => (current === offer.title ? '' : offer.title))}
+                          onClick={() => {
+                            setBookingOffer((current) => (current === offer.title ? '' : offer.title));
+                            // Selecting an offer should apply discount immediately.
+                            // (Discount is derived from bookingOffer state above.)
+                          }}
                           className={`rounded-2xl border p-4 text-left ${
                             bookingOffer === offer.title ? 'border-[#d6b16a] bg-[#d6b16a]/15' : 'border-white/10 bg-white/[0.05]'
                           }`}
                         >
                           <p className="font-black text-white">{offer.title}</p>
-                          <p className="mt-1 text-sm font-bold text-[#e7c987]">{offer.discount}</p>
+                          <p className="mt-1 text-sm font-bold text-[#e7c987]">{offer.discount_label}</p>
+                          <p className="mt-1 text-xs font-bold text-white/45">{offer.ends}</p>
                         </button>
                       ))}
                     </div>
@@ -1037,7 +1130,7 @@ const SavedOffersCard: React.FC<{
     <p className="text-xs font-black uppercase tracking-[0.22em] text-[#e7c987]">Offers</p>
     <h2 className="mt-2 font-luxury text-4xl text-white">Favorite active deals</h2>
     <div className="mt-6 grid gap-4 md:grid-cols-3">
-      {offers.map((offer) => {
+      {fallbackOffers.map((offer) => {
         const code = offer.title.toLowerCase().replace(/\s+/g, '-');
         const saved = savedOfferCodes.has(code);
         return (

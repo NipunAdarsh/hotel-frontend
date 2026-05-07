@@ -61,6 +61,27 @@ interface ApiOffer {
   ends_at: string | null;
 }
 
+interface DiningDish {
+  menu_item_id: number;
+  name: string;
+  category: string;
+  price: number;
+  image_url?: string | null;
+  description?: string | null;
+  is_bestseller?: number;
+  is_chef_pick?: number;
+  is_dessert_week?: number;
+}
+
+interface DiningShowcase {
+  most_ordered_title: string;
+  most_ordered_subtitle: string;
+  chef_recommendation_title: string;
+  chef_recommendation_subtitle: string;
+  dessert_week_title: string;
+  dessert_week_subtitle: string;
+}
+
 const todayInput = () => new Date().toISOString().slice(0, 10);
 
 const futureInput = (days: number) => {
@@ -86,7 +107,23 @@ const defaultDraft: BookingDraft = {
 const getInitialDraft = () => {
   try {
     const savedDraft = localStorage.getItem('luxuryBookingDraft');
-    return savedDraft ? { ...defaultDraft, ...JSON.parse(savedDraft) } : defaultDraft;
+    if (!savedDraft) return defaultDraft;
+
+    const parsed = JSON.parse(savedDraft) as Partial<BookingDraft>;
+    const normalizeDate = (value: unknown, fallback: string) => {
+      if (typeof value !== 'string' || !value.trim()) return fallback;
+      const raw = value.trim();
+      // Accept YYYY-MM-DD or full ISO strings and coerce to date input format.
+      const iso = raw.length >= 10 ? raw.slice(0, 10) : raw;
+      return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : fallback;
+    };
+
+    return {
+      ...defaultDraft,
+      ...parsed,
+      checkIn: normalizeDate(parsed.checkIn, defaultDraft.checkIn),
+      checkOut: normalizeDate(parsed.checkOut, defaultDraft.checkOut)
+    };
   } catch {
     return defaultDraft;
   }
@@ -138,6 +175,8 @@ export const LuxuryHome: React.FC = () => {
   const [loadingRooms, setLoadingRooms] = useState(true);
   const [publicRooms, setPublicRooms] = useState<LuxuryRoom[]>([]);
   const [publicOffers, setPublicOffers] = useState<OfferView[]>(fallbackOfferViews);
+  const [diningDishes, setDiningDishes] = useState<DiningDish[]>([]);
+  const [diningShowcase, setDiningShowcase] = useState<DiningShowcase>(fallbackDiningShowcase);
   const [selectedRoom, setSelectedRoom] = useState<LuxuryRoom | null>(null);
   const [galleryIndex, setGalleryIndex] = useState(0);
   const [bookingRoom, setBookingRoom] = useState<LuxuryRoom | null>(null);
@@ -214,6 +253,30 @@ export const LuxuryHome: React.FC = () => {
     };
 
     fetchOffers();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchDining = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/public/dining`);
+        const data = await readApiResponse<{ showcase?: DiningShowcase; dishes?: DiningDish[]; error?: string }>(response);
+        if (!response.ok) throw new Error(data.error || 'Could not load dining data.');
+        if (!isMounted) return;
+        setDiningShowcase(data.showcase || fallbackDiningShowcase);
+        setDiningDishes(Array.isArray(data.dishes) ? data.dishes : []);
+      } catch {
+        if (!isMounted) return;
+        setDiningShowcase(fallbackDiningShowcase);
+        setDiningDishes([]);
+      }
+    };
+
+    fetchDining();
     return () => {
       isMounted = false;
     };
@@ -544,7 +607,7 @@ export const LuxuryHome: React.FC = () => {
           </div>
         </section>
 
-        <DiningSection />
+        <DiningSection showcase={diningShowcase} dishes={diningDishes} />
         <ExperiencesSection />
         <MembershipSection />
         <ReviewsSection />
@@ -1107,31 +1170,112 @@ const SummaryLine: React.FC<{ label: string; value: number }> = ({ label, value 
   </div>
 );
 
-const DiningSection: React.FC = () => (
+const worldClassDishes = [
+  { name: 'Wagyu Beef Tenderloin', origin: 'Japan', price: 'Rs 3,400', note: 'A5 cut, truffle jus, smoked butter mash', image: 'https://images.unsplash.com/photo-1544025162-d76694265947?q=80&w=1200&auto=format&fit=crop', bestseller: true },
+  { name: 'Lobster Thermidor', origin: 'France', price: 'Rs 3,150', note: 'Classic mustard cream, gruyere gratin', image: 'https://images.unsplash.com/photo-1615141982883-c7ad0e69fd62?q=80&w=1200&auto=format&fit=crop', bestseller: true },
+  { name: 'Saffron Risotto Milanese', origin: 'Italy', price: 'Rs 1,680', note: 'Aged parmesan, white truffle drizzle', image: 'https://images.unsplash.com/photo-1630409346824-4f0e7b080087?q=80&w=1200&auto=format&fit=crop' },
+  { name: 'Sushi Omakase Selection', origin: 'Japan', price: 'Rs 2,450', note: 'Chef-curated seasonal nigiri and maki', image: 'https://images.unsplash.com/photo-1617196034796-73dfa7b1fd56?q=80&w=1200&auto=format&fit=crop', bestseller: true },
+  { name: 'Moroccan Lamb Tagine', origin: 'Morocco', price: 'Rs 1,980', note: 'Apricot glaze, saffron couscous, pistachio', image: 'https://images.unsplash.com/photo-1625944525533-473f1b7d54fb?q=80&w=1200&auto=format&fit=crop' },
+  { name: 'Butter Chicken Royale', origin: 'India', price: 'Rs 1,240', note: 'Charcoal tandoor finish, saffron naan', image: 'https://images.unsplash.com/photo-1603894584373-5ac82b2ae398?q=80&w=1200&auto=format&fit=crop', bestseller: true }
+];
+
+const diningStats = [
+  { label: 'Covers served monthly', value: '12k+' },
+  { label: 'Global dishes curated', value: '60+' },
+  { label: 'Repeat orders', value: '74%' },
+  { label: 'Chef table rating', value: '4.9/5' }
+];
+
+const fallbackDiningShowcase: DiningShowcase = {
+  most_ordered_title: 'Butter Chicken Royale',
+  most_ordered_subtitle: '412 orders this month',
+  chef_recommendation_title: 'Wagyu Tenderloin',
+  chef_recommendation_subtitle: 'Guests rate it 4.9/5',
+  dessert_week_title: 'Belgian Chocolate Dome',
+  dessert_week_subtitle: 'Pairs with Ethiopian roast'
+};
+
+const DiningSection: React.FC<{ showcase: DiningShowcase; dishes: DiningDish[] }> = ({ showcase, dishes }) => (
   <section id="dining" className="mx-auto max-w-7xl px-5 py-24 lg:px-8">
     <SectionHeading
       eyebrow="Dining and Chef"
-      title="A table worth travelling for."
-      copy="Signature dishes, chef-led menus, and intimate restaurant settings bring the stay into the evening."
+      title="A world menu, plated with theatre."
+      copy="Discover globally celebrated dishes, chef-led tasting experiences, and the most ordered signatures served across our premium dining spaces."
     />
-    <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
-      <div className="overflow-hidden rounded-[32px]">
-        <img
-          src="https://images.unsplash.com/photo-1559339352-11d035aa65de?q=80&w=1600&auto=format&fit=crop"
-          alt="Fine dining restaurant"
-          loading="lazy"
-          className="h-[520px] w-full object-cover transition duration-700 hover:scale-105"
-        />
+    <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr] mb-8">
+      <div className="rounded-[32px] border border-white/10 overflow-hidden bg-white/[0.04]">
+        <div className="relative h-[460px]">
+          <img
+            src="https://images.unsplash.com/photo-1559339352-11d035aa65de?q=80&w=1800&auto=format&fit=crop"
+            alt="Fine dining restaurant"
+            loading="lazy"
+            className="h-full w-full object-cover"
+          />
+          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
+          <div className="absolute bottom-6 left-6 right-6">
+            <p className="text-xs font-black uppercase tracking-[0.22em] text-[#e7c987] mb-2">Chef Signature Experience</p>
+            <h3 className="font-luxury text-5xl text-white">Tasting Menu of 9 Courses</h3>
+            <p className="mt-2 text-white/70 font-semibold">French finesse, Asian precision, Indian warmth — one curated journey.</p>
+          </div>
+        </div>
       </div>
       <div className="grid gap-6">
-        {['Coastal tasting menu', 'Fire-grilled signatures', 'Late-night patisserie'].map((dish) => (
-          <div key={dish} className="rounded-[28px] border border-white/10 bg-white/[0.05] p-6">
-            <p className="text-xs font-black uppercase tracking-[0.22em] text-[#e7c987]">Signature</p>
-            <h3 className="mt-3 font-luxury text-4xl text-white">{dish}</h3>
-            <p className="mt-3 leading-7 text-white/58">Seasonal ingredients, elegant plating, and quiet service cadence.</p>
+        {[
+          { title: 'Most Ordered Tonight', value: showcase.most_ordered_title, sub: showcase.most_ordered_subtitle },
+          { title: 'Chef Recommendation', value: showcase.chef_recommendation_title, sub: showcase.chef_recommendation_subtitle },
+          { title: 'Dessert of the Week', value: showcase.dessert_week_title, sub: showcase.dessert_week_subtitle }
+        ].map((card) => (
+          <div key={card.title} className="rounded-[28px] border border-white/10 bg-white/[0.05] p-6">
+            <p className="text-xs font-black uppercase tracking-[0.22em] text-[#e7c987]">{card.title}</p>
+            <h3 className="mt-3 font-luxury text-4xl text-white">{card.value}</h3>
+            <p className="mt-3 leading-7 text-white/58">{card.sub}</p>
           </div>
         ))}
       </div>
+    </div>
+
+    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 mb-8">
+      {diningStats.map((stat) => (
+        <div key={stat.label} className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+          <p className="text-3xl font-luxury text-[#e7c987]">{stat.value}</p>
+          <p className="mt-2 text-xs font-black uppercase tracking-[0.2em] text-white/45">{stat.label}</p>
+        </div>
+      ))}
+    </div>
+
+    <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+      {(dishes.length > 0
+        ? dishes.map((dish) => ({
+            name: dish.name,
+            origin: dish.category,
+            price: `Rs ${Number(dish.price).toLocaleString('en-IN')}`,
+            note: dish.description || 'Chef-crafted premium plating with global influence.',
+            image:
+              dish.image_url ||
+              'https://images.unsplash.com/photo-1559339352-11d035aa65de?q=80&w=1200&auto=format&fit=crop',
+            bestseller: Boolean(dish.is_bestseller)
+          }))
+        : worldClassDishes
+      ).map((dish) => (
+        <article key={dish.name} className="rounded-[24px] border border-white/10 bg-white/[0.05] overflow-hidden group">
+          <div className="relative h-52">
+            <img src={dish.image} alt={dish.name} className="h-full w-full object-cover transition duration-700 group-hover:scale-105" loading="lazy" />
+            <div className="absolute inset-0 bg-gradient-to-t from-black/75 to-transparent" />
+            {dish.bestseller && (
+              <span className="absolute top-4 left-4 inline-flex items-center gap-1 rounded-full bg-[#d6b16a] px-3 py-1 text-xs font-black text-black">
+                <Sparkles className="h-3 w-3" />
+                Best Seller
+              </span>
+            )}
+          </div>
+          <div className="p-5">
+            <p className="text-xs font-black uppercase tracking-[0.2em] text-[#e7c987]">{dish.origin}</p>
+            <h4 className="mt-2 text-2xl font-luxury text-white">{dish.name}</h4>
+            <p className="mt-2 text-white/60 leading-7">{dish.note}</p>
+            <p className="mt-4 text-lg font-black text-[#e7c987]">{dish.price}</p>
+          </div>
+        </article>
+      ))}
     </div>
   </section>
 );

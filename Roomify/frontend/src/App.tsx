@@ -10,6 +10,7 @@ import { ReceptionistPortal } from './pages/ReceptionistPortal';
 import { RestaurantPOS } from './pages/RestaurantPOS';
 import { AdminRooms } from './pages/AdminRooms';
 import { ManagePromos } from './pages/ManagePromos';
+import { ManageDining } from './pages/ManageDining';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { UserAuth } from './pages/UserAuth';
 import { UserPortal } from './pages/UserPortal';
@@ -90,6 +91,12 @@ export const App: React.FC = () => {
           <Route path="promos" element={
             <ProtectedRoute allowedRoles={['Admin']}>
               <ManagePromos />
+            </ProtectedRoute>
+          } />
+
+          <Route path="dining" element={
+            <ProtectedRoute allowedRoles={['Admin']}>
+              <ManageDining />
             </ProtectedRoute>
           } />
 

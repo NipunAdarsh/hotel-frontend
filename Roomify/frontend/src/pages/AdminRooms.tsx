@@ -1,27 +1,131 @@
-import React, { useState, useEffect } from 'react';
-import { Plus, Edit, Trash2, X } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Edit, Plus, Trash2, X } from 'lucide-react';
+import { API_BASE_URL } from '../config/api';
+import { readApiResponse } from '../utils/apiResponse';
+
+interface Room {
+  room_id: number;
+  room_number: string;
+  type: string;
+  price_per_night: number;
+  status: string;
+  title: string;
+  capacity: number;
+  rating: number;
+  popular: boolean;
+  image_url: string;
+  gallery: string[];
+  description: string;
+  amenities: string[];
+  included: string[];
+  policy: string;
+}
+
+interface RoomForm {
+  room_number: string;
+  type: string;
+  price_per_night: string;
+  status: string;
+  title: string;
+  capacity: string;
+  rating: string;
+  popular: boolean;
+  image_url: string;
+  gallery: string;
+  description: string;
+  amenities: string;
+  included: string;
+  policy: string;
+}
+
+const roomTypes = ['Standard', 'Deluxe', 'Suite', 'Premium', 'Family', 'Luxury'];
+const roomStatuses = ['Available', 'Occupied', 'Maintenance'];
+
+const defaultForm: RoomForm = {
+  room_number: '',
+  type: 'Standard',
+  price_per_night: '',
+  status: 'Available',
+  title: '',
+  capacity: '2',
+  rating: '4.8',
+  popular: false,
+  image_url: '',
+  gallery: '',
+  description: '',
+  amenities: '',
+  included: '',
+  policy: ''
+};
+
+const toMultiline = (values?: string[]) => (values ?? []).join('\n');
+
+const roomToForm = (room: Room): RoomForm => ({
+  room_number: room.room_number ?? '',
+  type: room.type ?? 'Standard',
+  price_per_night: String(room.price_per_night ?? ''),
+  status: room.status ?? 'Available',
+  title: room.title ?? '',
+  capacity: String(room.capacity ?? 2),
+  rating: String(room.rating ?? 4.8),
+  popular: Boolean(room.popular),
+  image_url: room.image_url ?? '',
+  gallery: toMultiline(room.gallery),
+  description: room.description ?? '',
+  amenities: (room.amenities ?? []).join(', '),
+  included: (room.included ?? []).join(', '),
+  policy: room.policy ?? ''
+});
+
+const statusClasses = (status: string) => {
+  const normalized = status.toLowerCase();
+  if (normalized === 'available') return 'bg-emerald-100 text-emerald-800';
+  if (normalized === 'occupied') return 'bg-red-100 text-red-800';
+  return 'bg-yellow-100 text-yellow-800';
+};
 
 export const AdminRooms: React.FC = () => {
-  const [rooms, setRooms] = useState<any[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingRoom, setEditingRoom] = useState<any>(null);
+  const [editingRoom, setEditingRoom] = useState<Room | null>(null);
+  const [form, setForm] = useState<RoomForm>(defaultForm);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
 
-  // Form State
-  const [roomNumber, setRoomNumber] = useState('');
-  const [roomType, setRoomType] = useState('Standard');
-  const [price, setPrice] = useState('');
-  const [status, setStatus] = useState('Available');
+  const visibleRooms = useMemo(
+    () =>
+      [...rooms].sort((a, b) =>
+        String(a.room_number).localeCompare(String(b.room_number), undefined, { numeric: true })
+      ),
+    [rooms]
+  );
+
+  const updateForm = <Key extends keyof RoomForm>(key: Key, value: RoomForm[Key]) => {
+    setForm((current) => ({ ...current, [key]: value }));
+  };
 
   const fetchRooms = async () => {
+    setLoading(true);
+    setError('');
+
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(`https://hotel-management-system-1-ejha.onrender.com/api/rooms`, {
-        headers: { 'Authorization': `Bearer ${token}` }
+      const response = await fetch(`${API_BASE_URL}/api/rooms`, {
+        headers: { Authorization: `Bearer ${token}` }
       });
-      const data = await response.json();
+      const data = await readApiResponse<Room[]>(response);
+
+      if (!response.ok || !Array.isArray(data)) {
+        throw new Error(data.error || 'Failed to fetch rooms.');
+      }
+
       setRooms(data);
-    } catch (err) {
-      console.error("Failed to fetch rooms", err);
+    } catch (fetchError) {
+      const message = fetchError instanceof Error ? fetchError.message : 'Failed to fetch rooms.';
+      setError(message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -31,178 +135,394 @@ export const AdminRooms: React.FC = () => {
 
   const openNewRoomModal = () => {
     setEditingRoom(null);
-    setRoomNumber('');
-    setRoomType('Standard');
-    setPrice('');
-    setStatus('Available');
+    setForm(defaultForm);
+    setError('');
     setIsModalOpen(true);
   };
 
-  const openEditModal = (room: any) => {
+  const openEditModal = (room: Room) => {
     setEditingRoom(room);
-    setRoomNumber(room.room_number);
-    setRoomType(room.type);
-    setPrice(room.price_per_night);
-    setStatus(room.status);
+    setForm(roomToForm(room));
+    setError('');
     setIsModalOpen(true);
   };
 
- const handleSaveRoom = async () => {
+  const buildPayload = () => ({
+    ...form,
+    price_per_night: Number(form.price_per_night),
+    capacity: Number(form.capacity),
+    rating: Number(form.rating),
+    gallery: form.gallery
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean),
+    amenities: form.amenities
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean),
+    included: form.included
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean)
+  });
+
+  const handleSaveRoom = async () => {
+    setSaving(true);
+    setError('');
+
     try {
       const token = localStorage.getItem('token');
-      const payload = { 
-        room_number: roomNumber, 
-        type: roomType, 
-        price_per_night: price, 
-        status 
-      };
-
-      // If we are editing, hit the PUT route. If it's a new room, hit POST.
-      const url = editingRoom 
-        ? `https://hotel-management-system-1-ejha.onrender.com/api/rooms/${editingRoom.room_id}`
-        : `https://hotel-management-system-1-ejha.onrender.com/api/rooms`;
-        
+      const url = editingRoom
+        ? `${API_BASE_URL}/api/rooms/${editingRoom.room_id}`
+        : `${API_BASE_URL}/api/rooms`;
       const method = editingRoom ? 'PUT' : 'POST';
 
       const response = await fetch(url, {
         method,
         headers: {
-          'Authorization': `Bearer ${token}`,
+          Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(buildPayload())
       });
+      const data = await readApiResponse<{ message?: string }>(response);
 
-      if (!response.ok) throw new Error('Failed to save room');
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to save room.');
+      }
 
       setIsModalOpen(false);
-      fetchRooms(); // Instantly refresh the table!
-    } catch (err) {
-      console.error(err);
-      alert('Error saving room.');
+      await fetchRooms();
+    } catch (saveError) {
+      const message = saveError instanceof Error ? saveError.message : 'Error saving room.';
+      setError(message);
+    } finally {
+      setSaving(false);
     }
   };
 
   const handleDelete = async (id: number) => {
-    if (!window.confirm("Are you sure you want to delete this room?")) return;
-    
+    if (!window.confirm('Are you sure you want to delete this room?')) return;
+
+    setError('');
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(`https://hotel-management-system-1-ejha.onrender.com/api/rooms/${id}`, {
+      const response = await fetch(`${API_BASE_URL}/api/rooms/${id}`, {
         method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: { Authorization: `Bearer ${token}` }
       });
+      const data = await readApiResponse<{ message?: string }>(response);
 
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to delete');
-      
-      fetchRooms(); // Instantly refresh the table!
-    } catch (err: any) {
-      alert(err.message); // Shows our smart database protection message!
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to delete room.');
+      }
+
+      await fetchRooms();
+    } catch (deleteError) {
+      const message = deleteError instanceof Error ? deleteError.message : 'Failed to delete room.';
+      setError(message);
     }
   };
+
   return (
-    <div className="flex-1 bg-white/40 backdrop-blur-3xl rounded-3xl p-10 border border-white/60 shadow-2xl overflow-y-auto h-[85vh]">
-      
-      {/* Header */}
-      <div className="flex justify-between items-end mb-8">
+    <div className="flex-1 overflow-y-auto rounded-3xl border border-white/60 bg-white/40 p-6 shadow-2xl backdrop-blur-3xl h-[85vh] lg:p-10">
+      <div className="mb-8 flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <h2 className="text-3xl font-headline font-black text-primary">Room Database</h2>
-          <p className="text-on-surface-variant font-medium mt-1">Manage physical inventory, pricing, and maintenance.</p>
+          <h2 className="font-headline text-3xl font-black text-primary">Room Database</h2>
+          <p className="mt-1 max-w-2xl font-medium text-on-surface-variant">
+            Manage physical inventory and the room cards shown on the public luxury homepage.
+          </p>
         </div>
-        <button 
+        <button
           onClick={openNewRoomModal}
-          className="bg-primary text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-primary-container transition-all shadow-lg active:scale-95"
+          className="flex items-center justify-center gap-2 rounded-xl bg-primary px-6 py-3 font-bold text-white shadow-lg transition-all hover:bg-primary-container active:scale-95"
         >
-          <Plus className="w-5 h-5" />
+          <Plus className="h-5 w-5" />
           Add New Room
         </button>
       </div>
 
-      {/* Database Table */}
-      <div className="bg-white/70 rounded-2xl border border-outline-variant/20 overflow-hidden shadow-sm">
-        <table className="w-full text-left border-collapse">
-          <thead>
-            <tr className="bg-surface-variant/30 text-primary/60 text-sm uppercase tracking-wider border-b border-outline-variant/20">
-              <th className="p-5 font-bold">Room No.</th>
-              <th className="p-5 font-bold">Type</th>
-              <th className="p-5 font-bold">Price (₹)</th>
-              <th className="p-5 font-bold">Status</th>
-              <th className="p-5 font-bold text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rooms.map((room) => (
-              <tr key={room.room_id} className="border-b border-outline-variant/10 hover:bg-white transition-colors">
-                <td className="p-5 font-black text-primary">Room {room.room_number}</td>
-                <td className="p-5 font-medium text-on-surface-variant">{room.type}</td>
-                <td className="p-5 font-bold text-secondary">₹{room.price_per_night}</td>
-                <td className="p-5">
-                  <span className={`px-3 py-1 rounded-full text-xs font-bold 
-                    ${room.status === 'Available' || room.status === 'AVAILABLE' ? 'bg-emerald-100 text-emerald-800' : 
-                      room.status === 'Occupied' || room.status === 'OCCUPIED' ? 'bg-red-100 text-red-800' : 
-                      'bg-yellow-100 text-yellow-800'}`}>
-                    {room.status.toUpperCase()}
-                  </span>
-                </td>
-                <td className="p-5 flex justify-end gap-3">
-                  <button onClick={() => openEditModal(room)} className="p-2 bg-surface-variant/50 hover:bg-primary/10 text-primary rounded-lg transition-colors">
-                    <Edit className="w-4 h-4" />
-                  </button>
-                  <button onClick={() => handleDelete(room.room_id)} className="p-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg transition-colors">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </td>
+      {error && (
+        <div className="mb-5 rounded-2xl border border-red-100 bg-red-50 px-5 py-4 text-sm font-bold text-red-700">
+          {error}
+        </div>
+      )}
+
+      <div className="overflow-hidden rounded-2xl border border-outline-variant/20 bg-white/70 shadow-sm">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[980px] border-collapse text-left">
+            <thead>
+              <tr className="border-b border-outline-variant/20 bg-surface-variant/30 text-sm uppercase tracking-wider text-primary/60">
+                <th className="p-5 font-bold">Room</th>
+                <th className="p-5 font-bold">Public Card</th>
+                <th className="p-5 font-bold">Capacity</th>
+                <th className="p-5 font-bold">Price</th>
+                <th className="p-5 font-bold">Status</th>
+                <th className="p-5 text-right font-bold">Actions</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td colSpan={6} className="p-8 text-center font-bold text-primary/60">
+                    Loading rooms...
+                  </td>
+                </tr>
+              ) : visibleRooms.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="p-8 text-center font-bold text-primary/60">
+                    No rooms yet. Add one and it will appear on the public homepage.
+                  </td>
+                </tr>
+              ) : (
+                visibleRooms.map((room) => (
+                  <tr
+                    key={room.room_id}
+                    className="border-b border-outline-variant/10 transition-colors hover:bg-white"
+                  >
+                    <td className="p-5">
+                      <p className="font-black text-primary">Room {room.room_number}</p>
+                      <p className="mt-1 text-sm font-semibold text-on-surface-variant">{room.type}</p>
+                    </td>
+                    <td className="p-5">
+                      <div className="flex items-center gap-4">
+                        <img
+                          src={room.image_url}
+                          alt={room.title}
+                          className="h-14 w-20 rounded-xl object-cover"
+                          loading="lazy"
+                        />
+                        <div>
+                          <p className="font-black text-primary">{room.title}</p>
+                          <p className="mt-1 line-clamp-1 max-w-[280px] text-sm text-on-surface-variant">
+                            {room.description}
+                          </p>
+                          {room.popular && (
+                            <span className="mt-2 inline-flex rounded-full bg-secondary/15 px-2 py-1 text-[10px] font-black uppercase tracking-wider text-secondary">
+                              Most Popular
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </td>
+                    <td className="p-5 font-bold text-primary">{room.capacity} guests</td>
+                    <td className="p-5 font-bold text-secondary">Rs {room.price_per_night.toLocaleString('en-IN')}</td>
+                    <td className="p-5">
+                      <span className={`rounded-full px-3 py-1 text-xs font-bold ${statusClasses(room.status)}`}>
+                        {room.status.toUpperCase()}
+                      </span>
+                    </td>
+                    <td className="p-5">
+                      <div className="flex justify-end gap-3">
+                        <button
+                          onClick={() => openEditModal(room)}
+                          className="rounded-lg bg-surface-variant/50 p-2 text-primary transition-colors hover:bg-primary/10"
+                          aria-label={`Edit room ${room.room_number}`}
+                        >
+                          <Edit className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(room.room_id)}
+                          className="rounded-lg bg-red-50 p-2 text-red-600 transition-colors hover:bg-red-100"
+                          aria-label={`Delete room ${room.room_number}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
-      {/* ADD/EDIT MODAL */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl relative border border-white/40">
-            <button onClick={() => setIsModalOpen(false)} className="absolute top-6 right-6 text-primary/40 hover:text-red-500 transition-colors">
-              <X className="w-6 h-6" />
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm">
+          <div className="relative max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-3xl border border-white/40 bg-white p-6 shadow-2xl lg:p-8">
+            <button
+              onClick={() => setIsModalOpen(false)}
+              className="absolute right-6 top-6 text-primary/40 transition-colors hover:text-red-500"
+              aria-label="Close room form"
+            >
+              <X className="h-6 w-6" />
             </button>
 
-            <h3 className="text-2xl font-headline font-bold text-primary mb-6">
-              {editingRoom ? 'Edit Room' : 'Add New Room'}
-            </h3>
+            <div className="mb-6 pr-10">
+              <h3 className="font-headline text-2xl font-bold text-primary">
+                {editingRoom ? 'Edit Room' : 'Add New Room'}
+              </h3>
+              <p className="mt-1 text-sm font-medium text-on-surface-variant">
+                These public details feed the room discovery cards, room detail modal, and live booking flow.
+              </p>
+            </div>
 
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-primary/60 uppercase mb-1">Room Number</label>
-                <input type="text" value={roomNumber} onChange={(e) => setRoomNumber(e.target.value)} className="w-full bg-surface-variant/30 border border-primary/10 rounded-xl py-3 px-4 font-bold text-primary focus:ring-2 focus:ring-secondary/20 outline-none" placeholder="e.g., 105" />
-              </div>
-              
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-primary/60 uppercase mb-1">Room Type</label>
-                  <select value={roomType} onChange={(e) => setRoomType(e.target.value)} className="w-full bg-surface-variant/30 border border-primary/10 rounded-xl py-3 px-4 font-bold text-primary outline-none appearance-none">
-                    <option value="Standard">Standard</option>
-                    <option value="Deluxe">Deluxe</option>
-                    <option value="Suite">Suite</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-primary/60 uppercase mb-1">Price / Night</label>
-                  <input type="number" value={price} onChange={(e) => setPrice(e.target.value)} className="w-full bg-surface-variant/30 border border-primary/10 rounded-xl py-3 px-4 font-bold text-primary focus:ring-2 focus:ring-secondary/20 outline-none" placeholder="₹" />
-                </div>
-              </div>
+            <div className="grid gap-5 lg:grid-cols-2">
+              <Field label="Room Number">
+                <input
+                  type="text"
+                  value={form.room_number}
+                  onChange={(event) => updateForm('room_number', event.target.value)}
+                  className="room-admin-input"
+                  placeholder="e.g., 105"
+                />
+              </Field>
 
-              <div>
-                <label className="block text-xs font-bold text-primary/60 uppercase mb-1">Status</label>
-                <select value={status} onChange={(e) => setStatus(e.target.value)} className="w-full bg-surface-variant/30 border border-primary/10 rounded-xl py-3 px-4 font-bold text-primary outline-none appearance-none">
-                  <option value="Available">Available</option>
-                  <option value="Occupied">Occupied (Warning)</option>
-                  <option value="Maintenance">Maintenance</option>
+              <Field label="Room Type">
+                <select
+                  value={form.type}
+                  onChange={(event) => updateForm('type', event.target.value)}
+                  className="room-admin-input"
+                >
+                  {roomTypes.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
                 </select>
+              </Field>
+
+              <Field label="Price / Night">
+                <input
+                  type="number"
+                  min="0"
+                  value={form.price_per_night}
+                  onChange={(event) => updateForm('price_per_night', event.target.value)}
+                  className="room-admin-input"
+                  placeholder="Rs"
+                />
+              </Field>
+
+              <Field label="Status">
+                <select
+                  value={form.status}
+                  onChange={(event) => updateForm('status', event.target.value)}
+                  className="room-admin-input"
+                >
+                  {roomStatuses.map((status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Homepage Card Title">
+                <input
+                  type="text"
+                  value={form.title}
+                  onChange={(event) => updateForm('title', event.target.value)}
+                  className="room-admin-input"
+                  placeholder="e.g., Family Residence"
+                />
+              </Field>
+
+              <div className="grid grid-cols-3 gap-3">
+                <Field label="Capacity">
+                  <input
+                    type="number"
+                    min="1"
+                    value={form.capacity}
+                    onChange={(event) => updateForm('capacity', event.target.value)}
+                    className="room-admin-input"
+                  />
+                </Field>
+                <Field label="Rating">
+                  <input
+                    type="number"
+                    min="1"
+                    max="5"
+                    step="0.1"
+                    value={form.rating}
+                    onChange={(event) => updateForm('rating', event.target.value)}
+                    className="room-admin-input"
+                  />
+                </Field>
+                <label className="flex h-full items-end">
+                  <span className="flex min-h-[50px] w-full items-center gap-2 rounded-xl border border-primary/10 bg-surface-variant/30 px-4 font-bold text-primary">
+                    <input
+                      type="checkbox"
+                      checked={form.popular}
+                      onChange={(event) => updateForm('popular', event.target.checked)}
+                      className="h-4 w-4 accent-primary"
+                    />
+                    Popular
+                  </span>
+                </label>
               </div>
 
-              <button onClick={handleSaveRoom} className="w-full mt-4 bg-primary hover:bg-primary-container text-white py-4 rounded-xl font-bold transition-all">
-                {editingRoom ? 'Update Database' : 'Add to Database'}
+              <Field label="Main Image URL">
+                <input
+                  type="url"
+                  value={form.image_url}
+                  onChange={(event) => updateForm('image_url', event.target.value)}
+                  className="room-admin-input"
+                  placeholder="https://..."
+                />
+              </Field>
+
+              <Field label="Gallery Image URLs">
+                <textarea
+                  value={form.gallery}
+                  onChange={(event) => updateForm('gallery', event.target.value)}
+                  className="room-admin-textarea min-h-[130px]"
+                  placeholder="One image URL per line"
+                />
+              </Field>
+
+              <Field label="Description">
+                <textarea
+                  value={form.description}
+                  onChange={(event) => updateForm('description', event.target.value)}
+                  className="room-admin-textarea min-h-[130px]"
+                  placeholder="Short premium description for guests"
+                />
+              </Field>
+
+              <Field label="Amenities">
+                <textarea
+                  value={form.amenities}
+                  onChange={(event) => updateForm('amenities', event.target.value)}
+                  className="room-admin-textarea"
+                  placeholder="King bed, Wi-Fi, Smart TV"
+                />
+              </Field>
+
+              <Field label="Included Services">
+                <textarea
+                  value={form.included}
+                  onChange={(event) => updateForm('included', event.target.value)}
+                  className="room-admin-textarea"
+                  placeholder="Daily breakfast, Welcome drink, Late checkout"
+                />
+              </Field>
+
+              <div className="lg:col-span-2">
+                <Field label="Policy">
+                  <textarea
+                    value={form.policy}
+                    onChange={(event) => updateForm('policy', event.target.value)}
+                    className="room-admin-textarea"
+                    placeholder="Cancellation, check-in, and guest policy"
+                  />
+                </Field>
+              </div>
+            </div>
+
+            <div className="mt-7 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <button
+                onClick={() => setIsModalOpen(false)}
+                className="rounded-xl border border-primary/15 px-6 py-3 font-bold text-primary transition hover:bg-primary/5"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveRoom}
+                disabled={saving}
+                className="rounded-xl bg-primary px-7 py-3 font-bold text-white transition hover:bg-primary-container disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {saving ? 'Saving...' : editingRoom ? 'Update Room' : 'Add Room'}
               </button>
             </div>
           </div>
@@ -211,3 +531,10 @@ export const AdminRooms: React.FC = () => {
     </div>
   );
 };
+
+const Field: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
+  <label className="block">
+    <span className="mb-1 block text-xs font-bold uppercase text-primary/60">{label}</span>
+    {children}
+  </label>
+);
