@@ -1,10 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, Calendar, BedDouble, Filter, Plus } from 'lucide-react';
+import { API_BASE_URL } from '../config/api';
+
+const roomTypes = ['Standard', 'Deluxe', 'Suite', 'Premium', 'Family', 'Luxury'];
+const bookingStatuses = ['Active', 'Completed', 'Cancelled', 'Pending', 'Confirmed'];
 
 export const Bookings: React.FC = () => {
   const [bookings, setBookings] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('All');
+  const [typeFilter, setTypeFilter] = useState('All');
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
@@ -12,8 +18,7 @@ export const Bookings: React.FC = () => {
     const fetchBookings = async () => {
       try {
         const token = localStorage.getItem('token');
-        // We reuse the guests route because it contains the perfect JOIN of all tables!
-        const response = await fetch('https://hotel-management-system-1-ejha.onrender.com/api/guests', {
+        const response = await fetch(`${API_BASE_URL}/api/guests`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         const data = await response.json();
@@ -27,11 +32,32 @@ export const Bookings: React.FC = () => {
     fetchBookings();
   }, []);
 
-  const filteredBookings = bookings.filter(b => 
-    b.guest_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    b.room_number.toString().includes(searchTerm) ||
-    b.booking_id.toString().includes(searchTerm)
-  );
+  const filteredBookings = useMemo(() => {
+    let filtered = [...bookings];
+
+    // Text search
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase();
+      filtered = filtered.filter(b =>
+        b.guest_name.toLowerCase().includes(term) ||
+        b.room_number.toString().includes(term) ||
+        b.booking_id.toString().includes(term) ||
+        (b.email && b.email.toLowerCase().includes(term))
+      );
+    }
+
+    // Status filter
+    if (statusFilter !== 'All') {
+      filtered = filtered.filter(b => b.status === statusFilter);
+    }
+
+    // Room type filter
+    if (typeFilter !== 'All') {
+      filtered = filtered.filter(b => b.room_type === typeFilter);
+    }
+
+    return filtered;
+  }, [bookings, searchTerm, statusFilter, typeFilter]);
 
   return (
     <div className="flex-1 bg-gradient-to-br from-surface-variant/40 to-white/20 backdrop-blur-3xl rounded-3xl p-10 border border-white/60 shadow-2xl overflow-y-auto h-[85vh]">
@@ -43,7 +69,6 @@ export const Bookings: React.FC = () => {
           <p className="text-on-surface-variant font-medium mt-1">Manage and review all active reservations.</p>
         </div>
         
-        {/* --- THE FIX: WIRED UP THE NEW BOOKING BUTTON --- */}
         <button 
           onClick={() => navigate('/dashboard/new-booking')}
           className="bg-primary text-white px-6 py-3 rounded-full font-bold flex items-center gap-2 hover:bg-primary-container transition-all shadow-lg active:scale-95"
@@ -53,24 +78,50 @@ export const Bookings: React.FC = () => {
         </button>
       </div>
 
-      {/* Search & Filters */}
+      {/* Search & Filters — now functional */}
       <div className="flex flex-col md:flex-row gap-4 mb-6">
         <div className="relative flex-1">
           <Search className="w-5 h-5 text-primary/40 absolute left-4 top-1/2 -translate-y-1/2" />
           <input
             type="text"
-            placeholder="Search by ID, Guest, or Room..."
+            placeholder="Search by ID, Guest, Room, or Email..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-12 pr-4 py-3 bg-white/60 border border-white/40 rounded-2xl focus:outline-none focus:ring-2 focus:ring-secondary/30 shadow-sm font-medium text-primary placeholder:text-primary/40 transition-all"
           />
         </div>
         <div className="flex gap-2">
-          <button className="px-4 py-3 bg-white/60 border border-white/40 rounded-2xl text-primary font-bold flex items-center gap-2 hover:bg-white transition-all"><Calendar className="w-4 h-4"/> Any Dates</button>
-          <button className="px-4 py-3 bg-white/60 border border-white/40 rounded-2xl text-primary font-bold flex items-center gap-2 hover:bg-white transition-all"><BedDouble className="w-4 h-4"/> Room Type</button>
-          <button className="px-4 py-3 bg-white/60 border border-white/40 rounded-2xl text-primary font-bold flex items-center gap-2 hover:bg-white transition-all"><Filter className="w-4 h-4"/> Status</button>
+          <select
+            value={typeFilter}
+            onChange={e => setTypeFilter(e.target.value)}
+            className="px-4 py-3 bg-white/60 border border-white/40 rounded-2xl text-primary font-bold text-sm outline-none cursor-pointer"
+          >
+            <option value="All">
+              All Room Types
+            </option>
+            {roomTypes.map(t => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+          <select
+            value={statusFilter}
+            onChange={e => setStatusFilter(e.target.value)}
+            className="px-4 py-3 bg-white/60 border border-white/40 rounded-2xl text-primary font-bold text-sm outline-none cursor-pointer"
+          >
+            <option value="All">All Statuses</option>
+            {bookingStatuses.map(s => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
         </div>
       </div>
+
+      {/* Results count */}
+      {!loading && (
+        <p className="mb-4 text-sm font-bold text-primary/50">
+          Showing {filteredBookings.length} of {bookings.length} bookings
+        </p>
+      )}
 
       {/* Directory Table */}
       <div className="bg-white/70 rounded-3xl border border-white/60 overflow-hidden shadow-sm">
@@ -109,6 +160,7 @@ export const Bookings: React.FC = () => {
                     <span className={`px-4 py-1.5 rounded-full text-xs font-bold tracking-wider
                       ${b.status === 'Active' ? 'bg-cyan-100 text-cyan-800' : 
                         b.status === 'Completed' ? 'bg-emerald-100 text-emerald-800' : 
+                        b.status === 'Cancelled' ? 'bg-red-100 text-red-800' :
                         'bg-surface-variant text-on-surface-variant'}`}>
                       {b.status === 'Active' ? 'Confirmed' : b.status}
                     </span>
@@ -116,7 +168,7 @@ export const Bookings: React.FC = () => {
                 </tr>
               ))
             ) : (
-              <tr><td colSpan={5} className="p-10 text-center font-medium text-primary/50">No bookings found.</td></tr>
+              <tr><td colSpan={5} className="p-10 text-center font-medium text-primary/50">No bookings found matching your filters.</td></tr>
             )}
           </tbody>
         </table>

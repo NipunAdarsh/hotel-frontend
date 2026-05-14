@@ -1,16 +1,20 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Search, Calendar, Phone, Mail } from 'lucide-react';
+import { API_BASE_URL } from '../config/api';
+
+const bookingStatuses = ['Active', 'Completed', 'Cancelled', 'Pending', 'Confirmed'];
 
 export const GuestDirectory: React.FC = () => {
   const [guests, setGuests] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('All');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const fetchGuests = async () => {
       try {
         const token = localStorage.getItem('token');
-        const response = await fetch('https://hotel-management-system-1-ejha.onrender.com/api/guests', {
+        const response = await fetch(`${API_BASE_URL}/api/guests`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         const data = await response.json();
@@ -24,12 +28,27 @@ export const GuestDirectory: React.FC = () => {
     fetchGuests();
   }, []);
 
-  // Real-time search filter!
-  const filteredGuests = guests.filter(guest => 
-    guest.guest_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    guest.phone.includes(searchTerm) ||
-    guest.room_number.toString().includes(searchTerm)
-  );
+  const filteredGuests = useMemo(() => {
+    let filtered = [...guests];
+
+    // Text search
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase();
+      filtered = filtered.filter(guest =>
+        guest.guest_name.toLowerCase().includes(term) ||
+        guest.phone.includes(term) ||
+        guest.room_number.toString().includes(term) ||
+        (guest.email && guest.email.toLowerCase().includes(term))
+      );
+    }
+
+    // Status filter
+    if (statusFilter !== 'All') {
+      filtered = filtered.filter(guest => guest.status === statusFilter);
+    }
+
+    return filtered;
+  }, [guests, searchTerm, statusFilter]);
 
   if (loading) return <div className="p-10 font-bold text-primary">Loading guest ledger...</div>;
 
@@ -43,19 +62,36 @@ export const GuestDirectory: React.FC = () => {
           <p className="text-on-surface-variant font-medium mt-1">Search and manage all past and present reservations.</p>
         </div>
         
-        <div className="relative w-full md:w-96">
-          <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-            <Search className="w-5 h-5 text-primary/40" />
+        <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
+          <div className="relative flex-1 md:w-72">
+            <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+              <Search className="w-5 h-5 text-primary/40" />
+            </div>
+            <input
+              type="text"
+              placeholder="Search by name, phone, or room..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-11 pr-4 py-3 bg-white/60 border border-white rounded-xl focus:outline-none focus:ring-2 focus:ring-secondary/30 shadow-sm font-medium text-primary placeholder:text-primary/40 transition-all"
+            />
           </div>
-          <input
-            type="text"
-            placeholder="Search by name, phone, or room..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-11 pr-4 py-3 bg-white/60 border border-white rounded-xl focus:outline-none focus:ring-2 focus:ring-secondary/30 shadow-sm font-medium text-primary placeholder:text-primary/40 transition-all"
-          />
+          <select
+            value={statusFilter}
+            onChange={e => setStatusFilter(e.target.value)}
+            className="px-4 py-3 bg-white/60 border border-white rounded-xl font-bold text-primary text-sm outline-none cursor-pointer"
+          >
+            <option value="All">All Statuses</option>
+            {bookingStatuses.map(s => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
         </div>
       </div>
+
+      {/* Results count */}
+      <p className="mb-4 text-sm font-bold text-primary/50">
+        Showing {filteredGuests.length} of {guests.length} records
+      </p>
 
       {/* Directory Table */}
       <div className="bg-white/70 rounded-2xl border border-outline-variant/20 overflow-hidden shadow-sm">
@@ -106,7 +142,8 @@ export const GuestDirectory: React.FC = () => {
                       <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider
                         ${guest.status === 'Active' ? 'bg-blue-100 text-blue-800' : 
                           guest.status === 'Completed' ? 'bg-emerald-100 text-emerald-800' : 
-                          'bg-red-100 text-red-800'}`}>
+                          guest.status === 'Cancelled' ? 'bg-red-100 text-red-800' :
+                          'bg-yellow-100 text-yellow-800'}`}>
                         {guest.status}
                       </span>
                     </td>

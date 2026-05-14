@@ -7,14 +7,20 @@ import {
   Clock,
   CreditCard,
   Download,
+  Edit3,
   Gift,
   Heart,
   History,
   IndianRupee,
+  Key,
   LogOut,
+  Minus,
+  Plus,
   Repeat2,
   ShieldCheck,
+  ShoppingBag,
   Sparkles,
+  UtensilsCrossed,
   UserRound,
   X
 } from 'lucide-react';
@@ -212,6 +218,20 @@ export const UserPortal: React.FC = () => {
   const [isWorking, setIsWorking] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
 
+  // Feature 1: Room Service
+  const [menuItems, setMenuItems] = useState<any[]>([]);
+  const [cart, setCart] = useState<Record<number, number>>({});
+  const [rsOrders, setRsOrders] = useState<any[]>([]);
+  const [showRoomService, setShowRoomService] = useState(false);
+  const [rsWorking, setRsWorking] = useState(false);
+
+  // Feature 3: Profile Edit
+  const [showProfileEdit, setShowProfileEdit] = useState(false);
+  const [profileForm, setProfileForm] = useState({ name: '', phone: '' });
+  const [passwordForm, setPasswordForm] = useState({ current: '', newPw: '', confirm: '' });
+  const [profileWorking, setProfileWorking] = useState(false);
+  const [profileMsg, setProfileMsg] = useState('');
+
   const authHeaders = useCallback(() => {
     const token = localStorage.getItem('guestToken');
     return { Authorization: `Bearer ${token}` };
@@ -233,10 +253,9 @@ export const UserPortal: React.FC = () => {
         check_in: bookingDates.check_in,
         check_out: bookingDates.check_out
       });
-      const [profileResponse, roomsResponse, bookingsResponse, membershipResponse, invoicesResponse, preferencesResponse] =
+      const [profileResponse, bookingsResponse, membershipResponse, invoicesResponse, preferencesResponse] =
         await Promise.all([
           fetch(`${API_BASE_URL}/api/user/profile`, { headers: authHeaders() }),
-          fetch(`${API_BASE_URL}/api/user/rooms/available?${dateParams.toString()}`, { headers: authHeaders() }),
           fetch(`${API_BASE_URL}/api/user/bookings`, { headers: authHeaders() }),
           fetch(`${API_BASE_URL}/api/user/membership`, { headers: authHeaders() }),
           fetch(`${API_BASE_URL}/api/user/invoices`, { headers: authHeaders() }),
@@ -249,14 +268,12 @@ export const UserPortal: React.FC = () => {
       }
 
       const profileData = await readApiResponse<ProfileResponse>(profileResponse);
-      const roomsData = await readApiResponse<Room[] | { error?: string }>(roomsResponse);
       const bookingsData = await readApiResponse<Booking[] | { error?: string }>(bookingsResponse);
       const membershipData = await readApiResponse<Membership | { error?: string }>(membershipResponse);
       const invoicesData = await readApiResponse<Invoice[] | { error?: string }>(invoicesResponse);
       const preferencesData = await readApiResponse<PreferencesResponse>(preferencesResponse);
 
       if (!profileResponse.ok || !profileData.guest) throw new Error(profileData.error || 'Could not load profile.');
-      if (!roomsResponse.ok || !Array.isArray(roomsData)) throw new Error(('error' in roomsData && roomsData.error) || 'Could not load rooms.');
       if (!bookingsResponse.ok || !Array.isArray(bookingsData)) throw new Error(('error' in bookingsData && bookingsData.error) || 'Could not load bookings.');
       if (!membershipResponse.ok || (membershipData as { error?: string }).error) {
         throw new Error((membershipData as { error?: string }).error || 'Could not load membership.');
@@ -265,24 +282,48 @@ export const UserPortal: React.FC = () => {
       if (!preferencesResponse.ok || preferencesData.error) throw new Error(preferencesData.error || 'Could not load preferences.');
 
       setGuest(profileData.guest);
-      setRooms(roomsData);
       setBookings(bookingsData);
       setMembership(membershipData as Membership);
       setInvoices(invoicesData);
       setPreferences(preferencesData.preferences);
       setSavedRooms(preferencesData.savedRooms);
       setSavedOffers(preferencesData.savedOffers);
+
+      // Pre-fetch room service data so it's ready and history is visible
+      await fetchRoomServiceData();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Could not load your guest portal.';
       setStatusMsg(message);
     } finally {
       setLoading(false);
     }
-  }, [authHeaders, handleLogout, bookingDates.check_in, bookingDates.check_out]);
+  }, [authHeaders, handleLogout]);
 
   useEffect(() => {
     fetchPortalData();
   }, [fetchPortalData]);
+
+  // Fetch available rooms whenever dates change without triggering a full portal reload
+  useEffect(() => {
+    let mounted = true;
+    const fetchRooms = async () => {
+      try {
+        const dateParams = new URLSearchParams({
+          check_in: bookingDates.check_in,
+          check_out: bookingDates.check_out
+        });
+        const roomsResponse = await fetch(`${API_BASE_URL}/api/user/rooms/available?${dateParams.toString()}`, { headers: authHeaders() });
+        const roomsData = await readApiResponse<Room[] | { error?: string }>(roomsResponse);
+        if (roomsResponse.ok && Array.isArray(roomsData) && mounted) {
+          setRooms(roomsData);
+        }
+      } catch {
+        // ignore
+      }
+    };
+    fetchRooms();
+    return () => { mounted = false; };
+  }, [authHeaders, bookingDates.check_in, bookingDates.check_out]);
 
   useEffect(() => {
     let mounted = true;
@@ -563,6 +604,105 @@ export const UserPortal: React.FC = () => {
     }
   };
 
+  // === Feature 1: Room Service Handlers ===
+  const fetchRoomServiceData = async () => {
+    try {
+      const [menuRes, ordersRes] = await Promise.all([
+        fetch(`${API_BASE_URL}/api/user/menu`, { headers: authHeaders() }),
+        fetch(`${API_BASE_URL}/api/user/room-service/orders`, { headers: authHeaders() })
+      ]);
+      const menuData = await readApiResponse<any[]>(menuRes);
+      const ordersData = await readApiResponse<any[]>(ordersRes);
+      if (menuRes.ok && Array.isArray(menuData)) setMenuItems(menuData);
+      if (ordersRes.ok && Array.isArray(ordersData)) setRsOrders(ordersData);
+    } catch { /* ignore */ }
+  };
+
+  const updateCart = (itemId: number, delta: number) => {
+    setCart(prev => {
+      const current = prev[itemId] || 0;
+      const next = Math.max(0, current + delta);
+      if (next === 0) { const { [itemId]: _, ...rest } = prev; return rest; }
+      return { ...prev, [itemId]: next };
+    });
+  };
+
+  const cartTotal = useMemo(() => {
+    return Object.entries(cart).reduce((sum, [id, qty]) => {
+      const item = menuItems.find(m => m.menu_item_id === Number(id));
+      return sum + (item ? Number(item.price) * qty : 0);
+    }, 0);
+  }, [cart, menuItems]);
+
+  const placeRoomServiceOrder = async () => {
+    const items = Object.entries(cart).map(([id, qty]) => ({ menu_item_id: Number(id), quantity: qty }));
+    if (items.length === 0) return;
+    setRsWorking(true);
+    try {
+      const data = await requestJson<{ message?: string }>('/api/user/room-service', { items });
+      setStatusMsg(data.message || 'Room service order placed!');
+      setCart({});
+      await fetchRoomServiceData();
+    } catch (error) {
+      setStatusMsg(error instanceof Error ? error.message : 'Could not place order.');
+    } finally {
+      setRsWorking(false);
+    }
+  };
+
+  const handleOpenRoomService = async () => {
+    setShowRoomService(true);
+    await fetchRoomServiceData();
+  };
+
+  // === Feature 3: Profile Edit Handlers ===
+  const openProfileEdit = () => {
+    if (guest) {
+      setProfileForm({ name: guest.name, phone: guest.phone });
+    }
+    setPasswordForm({ current: '', newPw: '', confirm: '' });
+    setProfileMsg('');
+    setShowProfileEdit(true);
+  };
+
+  const handleUpdateProfile = async () => {
+    setProfileWorking(true);
+    setProfileMsg('');
+    try {
+      const data = await requestJson<{ message?: string }>('/api/user/profile', profileForm);
+      setProfileMsg(data.message || 'Profile updated!');
+      await fetchPortalData();
+    } catch (error) {
+      setProfileMsg(error instanceof Error ? error.message : 'Could not update profile.');
+    } finally {
+      setProfileWorking(false);
+    }
+  };
+
+  const handleChangePassword = async () => {
+    if (passwordForm.newPw !== passwordForm.confirm) {
+      setProfileMsg('New passwords do not match.');
+      return;
+    }
+    setProfileWorking(true);
+    setProfileMsg('');
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/user/password`, {
+        method: 'PUT',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ current_password: passwordForm.current, new_password: passwordForm.newPw })
+      });
+      const data = await readApiResponse<{ error?: string; message?: string }>(response);
+      if (!response.ok) throw new Error(data.error || 'Could not change password.');
+      setProfileMsg(data.message || 'Password changed!');
+      setPasswordForm({ current: '', newPw: '', confirm: '' });
+    } catch (error) {
+      setProfileMsg(error instanceof Error ? error.message : 'Could not change password.');
+    } finally {
+      setProfileWorking(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-[#070605] flex items-center justify-center text-[#e7c987] font-black text-xl">
@@ -606,9 +746,13 @@ export const UserPortal: React.FC = () => {
                 <p className="font-black text-white">{guest?.name}</p>
                 <p className="text-xs text-white/45 font-bold">{guest?.email}</p>
               </div>
-              <div className="w-11 h-11 rounded-full bg-[#d6b16a] text-black flex items-center justify-center">
+              <button
+                onClick={openProfileEdit}
+                className="w-11 h-11 rounded-full bg-[#d6b16a] text-black flex items-center justify-center hover:bg-[#f0d28d] transition-all"
+                aria-label="Edit profile"
+              >
                 <UserRound className="w-5 h-5" />
-              </div>
+              </button>
             </div>
             <button
               onClick={handleLogout}
@@ -672,6 +816,43 @@ export const UserPortal: React.FC = () => {
         <section className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-12">
           <SavedOffersCard savedOfferCodes={savedOfferCodes} onToggle={handleToggleSavedOffer} isWorking={isWorking} />
         </section>
+
+        {/* Feature 1: Room Service Section */}
+        {activeBookings.length > 0 && (
+          <section className="mb-12">
+            <div className="rounded-[28px] border border-[#d6b16a]/20 bg-gradient-to-r from-[#d6b16a]/10 to-white/[0.04] p-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-4">
+                <div className="w-14 h-14 rounded-2xl bg-[#d6b16a]/20 flex items-center justify-center">
+                  <UtensilsCrossed className="w-7 h-7 text-[#e7c987]" />
+                </div>
+                <div>
+                  <h2 className="font-luxury text-2xl font-black text-white">Room Service</h2>
+                  <p className="text-white/55 font-bold text-sm mt-1">Order food directly to your room from our menu</p>
+                </div>
+              </div>
+              <button
+                onClick={handleOpenRoomService}
+                className="px-6 py-3 rounded-2xl bg-[#d6b16a] text-black font-black hover:bg-[#f0d28d] transition-all active:scale-[0.97] flex items-center gap-2"
+              >
+                <ShoppingBag className="w-5 h-5" />
+                Order Now
+              </button>
+            </div>
+            {rsOrders.length > 0 && (
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {rsOrders.slice(0, 3).map(order => (
+                  <div key={order.order_id} className="rounded-2xl bg-white/[0.06] border border-white/10 p-4">
+                    <div className="flex justify-between items-center">
+                      <span className="font-black text-white">Order #{order.order_id}</span>
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${order.status === 'Unpaid' ? 'bg-[#d6b16a]/15 text-[#e7c987]' : 'bg-emerald-500/15 text-emerald-400'}`}>{order.status}</span>
+                    </div>
+                    <p className="text-white/45 font-bold text-sm mt-1">Room {order.room_number} · Rs {formatCurrency(order.total_amount)}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
 
         <section className="mb-12">
           <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
@@ -993,6 +1174,112 @@ export const UserPortal: React.FC = () => {
           isWorking={isWorking}
           submitLabel="Rebook"
         />
+      )}
+
+      {/* Feature 1: Room Service Modal */}
+      {showRoomService && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="w-full max-w-4xl max-h-[90vh] rounded-[28px] border border-white/10 bg-[#11100e] shadow-2xl flex flex-col">
+            <div className="p-6 border-b border-white/10 flex items-start justify-between">
+              <div>
+                <p className="text-xs font-black uppercase tracking-widest text-[#e7c987] mb-1">Room Service</p>
+                <h2 className="text-3xl font-luxury font-black text-white">Order from Menu</h2>
+              </div>
+              <button onClick={() => setShowRoomService(false)} className="rounded-full bg-white/10 p-2 text-white/70"><X className="h-5 w-5" /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {menuItems.length > 0 ? menuItems.map(item => {
+                const qty = cart[item.menu_item_id] || 0;
+                return (
+                  <div key={item.menu_item_id} className="rounded-2xl border border-white/10 bg-white/[0.05] p-4 flex flex-col">
+                    {item.image_url && <img src={item.image_url} alt={item.name} className="h-32 w-full object-cover rounded-xl mb-3" />}
+                    <p className="font-black text-white text-lg">{item.name}</p>
+                    <p className="text-xs font-bold text-white/45 mb-1">{item.category}</p>
+                    {item.description && <p className="text-sm text-white/40 mb-2 line-clamp-2">{item.description}</p>}
+                    <div className="mt-auto flex items-center justify-between pt-3">
+                      <span className="text-[#e7c987] font-black text-lg">Rs {formatCurrency(item.price)}</span>
+                      {qty === 0 ? (
+                        <button onClick={() => updateCart(item.menu_item_id, 1)} className="px-4 py-2 rounded-xl bg-[#d6b16a] text-black font-black text-sm hover:bg-[#f0d28d] transition-all">Add</button>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => updateCart(item.menu_item_id, -1)} className="w-8 h-8 rounded-lg bg-white/10 text-white flex items-center justify-center"><Minus className="w-4 h-4" /></button>
+                          <span className="font-black text-white w-6 text-center">{qty}</span>
+                          <button onClick={() => updateCart(item.menu_item_id, 1)} className="w-8 h-8 rounded-lg bg-[#d6b16a] text-black flex items-center justify-center"><Plus className="w-4 h-4" /></button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              }) : (
+                <p className="sm:col-span-2 lg:col-span-3 text-center text-white/45 font-bold py-10">No menu items available right now.</p>
+              )}
+            </div>
+            {Object.keys(cart).length > 0 && (
+              <div className="p-6 border-t border-white/10 flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-white/45 font-bold text-sm">{Object.values(cart).reduce((a, b) => a + b, 0)} items</p>
+                  <p className="text-[#e7c987] font-black text-xl">Rs {formatCurrency(cartTotal)}</p>
+                </div>
+                <button
+                  onClick={placeRoomServiceOrder}
+                  disabled={rsWorking}
+                  className="px-8 py-3 rounded-2xl bg-[#d6b16a] text-black font-black hover:bg-[#f0d28d] transition-all disabled:opacity-60"
+                >
+                  {rsWorking ? 'Placing...' : 'Place Order'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Feature 3: Profile Edit Modal */}
+      {showProfileEdit && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="w-full max-w-md rounded-[28px] border border-white/10 bg-[#11100e] p-6 shadow-2xl">
+            <div className="flex items-start justify-between mb-6">
+              <div>
+                <p className="text-xs font-black uppercase tracking-widest text-[#e7c987] mb-1">Account</p>
+                <h2 className="text-3xl font-luxury font-black text-white">Edit Profile</h2>
+              </div>
+              <button onClick={() => setShowProfileEdit(false)} className="rounded-full bg-white/10 p-2 text-white/70"><X className="h-5 w-5" /></button>
+            </div>
+
+            {profileMsg && (
+              <div className="mb-4 p-3 rounded-2xl bg-[#d6b16a]/12 border border-[#d6b16a]/25 font-bold text-[#e7c987] text-sm">{profileMsg}</div>
+            )}
+
+            <div className="space-y-3 mb-6">
+              <label className="block">
+                <span className="text-xs font-black uppercase text-white/45">Name</span>
+                <input value={profileForm.name} onChange={e => setProfileForm(p => ({ ...p, name: e.target.value }))} className="mt-1 w-full rounded-2xl border border-white/10 bg-white/[0.06] px-4 py-3 font-bold text-white outline-none" />
+              </label>
+              <label className="block">
+                <span className="text-xs font-black uppercase text-white/45">Phone</span>
+                <input value={profileForm.phone} onChange={e => setProfileForm(p => ({ ...p, phone: e.target.value }))} className="mt-1 w-full rounded-2xl border border-white/10 bg-white/[0.06] px-4 py-3 font-bold text-white outline-none" />
+              </label>
+              <button onClick={handleUpdateProfile} disabled={profileWorking} className="w-full py-3 rounded-2xl bg-[#d6b16a] text-black font-black hover:bg-[#f0d28d] transition-all disabled:opacity-60 flex items-center justify-center gap-2">
+                <Edit3 className="w-4 h-4" />
+                {profileWorking ? 'Saving...' : 'Update Profile'}
+              </button>
+            </div>
+
+            <div className="border-t border-white/10 pt-5">
+              <div className="flex items-center gap-2 mb-4">
+                <Key className="w-4 h-4 text-[#e7c987]" />
+                <h3 className="font-luxury text-xl text-white">Change Password</h3>
+              </div>
+              <div className="space-y-3">
+                <input type="password" placeholder="Current password" value={passwordForm.current} onChange={e => setPasswordForm(p => ({ ...p, current: e.target.value }))} className="w-full rounded-2xl border border-white/10 bg-white/[0.06] px-4 py-3 font-bold text-white outline-none placeholder:text-white/35" />
+                <input type="password" placeholder="New password" value={passwordForm.newPw} onChange={e => setPasswordForm(p => ({ ...p, newPw: e.target.value }))} className="w-full rounded-2xl border border-white/10 bg-white/[0.06] px-4 py-3 font-bold text-white outline-none placeholder:text-white/35" />
+                <input type="password" placeholder="Confirm new password" value={passwordForm.confirm} onChange={e => setPasswordForm(p => ({ ...p, confirm: e.target.value }))} className="w-full rounded-2xl border border-white/10 bg-white/[0.06] px-4 py-3 font-bold text-white outline-none placeholder:text-white/35" />
+                <button onClick={handleChangePassword} disabled={profileWorking || !passwordForm.current || !passwordForm.newPw} className="w-full py-3 rounded-2xl bg-white/10 text-white font-black hover:bg-white/15 transition-all disabled:opacity-40">
+                  {profileWorking ? 'Changing...' : 'Change Password'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

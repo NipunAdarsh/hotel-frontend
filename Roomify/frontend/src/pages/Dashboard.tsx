@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { API_BASE_URL } from '../config/api';
 
 // Premium, moody, natural aesthetic image array to replace the broken Unsplash API
 const PREMIUM_ROOM_IMAGES = [
@@ -25,6 +26,9 @@ export const Dashboard: React.FC = () => {
   const [finalInvoiceData, setFinalInvoiceData] = useState<any>(null);
   const [restaurantTab, setRestaurantTab] = useState(0);
   const [isFetchingTab, setIsFetchingTab] = useState(false);
+  // Feature 2: Checkout Preview
+  const [previewData, setPreviewData] = useState<any>(null);
+  const [checkoutStep, setCheckoutStep] = useState<'preview' | 'confirm'>('preview');
 
   // Live Metrics & Modal State
   const [metrics, setMetrics] = useState({ arrivals: 0, hosted: 0, revenue: 0, roomRevenue: 0, posRevenue: 0 });
@@ -37,7 +41,7 @@ export const Dashboard: React.FC = () => {
       const token = localStorage.getItem('token');
       if (!token) return navigate('/');
       
-      const roomRes = await fetch('https://hotel-management-system-1-ejha.onrender.com/api/rooms', {
+      const roomRes = await fetch(`${API_BASE_URL}/api/rooms`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (!roomRes.ok) throw new Error('Failed to fetch room data');
@@ -45,7 +49,7 @@ export const Dashboard: React.FC = () => {
       setRooms(roomData); 
 
       // Fetch Real Live Analytics
-      const analyticsRes = await fetch('https://hotel-management-system-1-ejha.onrender.com/api/analytics/dashboard', {
+      const analyticsRes = await fetch(`${API_BASE_URL}/api/analytics/dashboard`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (analyticsRes.ok) {
@@ -65,20 +69,41 @@ export const Dashboard: React.FC = () => {
 
   const handleOpenCheckout = async (room: any) => {
     setCheckoutRoom(room);
+    setCheckoutStep('preview');
+    setPreviewData(null);
     setRestaurantTab(0);
     setIsFetchingTab(true);
+    setCheckoutError('');
+    setCheckoutSuccess(false);
+    setFinalInvoiceData(null);
     
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(`https://hotel-management-system-1-ejha.onrender.com/api/restaurant/tab/${room.room_id}`, {
+      // Fetch restaurant tab
+      const tabRes = await fetch(`${API_BASE_URL}/api/restaurant/tab/${room.room_id}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      const data = await response.json();
-      if (data.total) {
-        setRestaurantTab(data.total);
+      const tabData = await tabRes.json();
+      if (tabData.total) setRestaurantTab(tabData.total);
+
+      // Feature 2: Fetch detailed checkout preview
+      const bookingRes = await fetch(`${API_BASE_URL}/api/guests`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const allBookings = await bookingRes.json();
+      const activeBooking = allBookings.find((b: any) => b.room_id === room.room_id && b.status === 'Active');
+      
+      if (activeBooking) {
+        const previewRes = await fetch(`${API_BASE_URL}/api/invoices/preview/${activeBooking.booking_id}`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (previewRes.ok) {
+          const preview = await previewRes.json();
+          setPreviewData(preview);
+        }
       }
     } catch (err) {
-      console.error("Failed to fetch restaurant tab", err);
+      console.error("Failed to fetch checkout data", err);
     } finally {
       setIsFetchingTab(false);
     }
@@ -90,7 +115,7 @@ export const Dashboard: React.FC = () => {
 
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(`https://hotel-management-system-1-ejha.onrender.com/api/bookings/checkout/${checkoutRoom.room_id}`, {
+      const response = await fetch(`${API_BASE_URL}/api/bookings/checkout/${checkoutRoom.room_id}`, {
         method: 'POST', 
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
       });
@@ -264,10 +289,18 @@ export const Dashboard: React.FC = () => {
             </button>
 
             {!checkoutSuccess ? (
-              // --- STANDARD CHECKOUT VIEW ---
+              // --- TWO-STEP CHECKOUT: PREVIEW → CONFIRM ---
               <>
-                <h2 className="text-3xl font-headline font-black text-primary mb-1">Finalize Checkout</h2>
-                <p className="text-primary/60 font-bold text-sm mb-8 tracking-widest uppercase">Room {checkoutRoom.room_number} • {checkoutRoom.type}</p>
+                <h2 className="text-3xl font-headline font-black text-primary mb-1">
+                  {checkoutStep === 'preview' ? 'Checkout Preview' : 'Confirm Payment'}
+                </h2>
+                <p className="text-primary/60 font-bold text-sm mb-4 tracking-widest uppercase">Room {checkoutRoom.room_number} • {checkoutRoom.type}</p>
+
+                {/* Step indicator */}
+                <div className="flex gap-2 mb-6">
+                  <div className={`flex-1 h-1.5 rounded-full ${checkoutStep === 'preview' ? 'bg-secondary' : 'bg-emerald-500'}`} />
+                  <div className={`flex-1 h-1.5 rounded-full ${checkoutStep === 'confirm' ? 'bg-secondary' : 'bg-outline-variant/30'}`} />
+                </div>
 
                 {checkoutError && (
                   <div className="mb-6 p-4 bg-red-50 text-red-700 rounded-xl text-sm font-bold border border-red-100 flex items-center gap-2">
@@ -276,36 +309,110 @@ export const Dashboard: React.FC = () => {
                   </div>
                 )}
 
-                <div className="bg-surface-variant/40 rounded-2xl p-6 mb-8 border border-outline-variant/20 shadow-inner">
-                  <div className="flex justify-between mb-4 text-sm text-primary font-bold">
-                    <span>Base Rate (1 Night)</span>
-                    <span>₹{Number(checkoutRoom.price_per_night).toLocaleString('en-IN')}</span>
-                  </div>
-                  <div className="flex justify-between mb-4 text-sm text-primary font-bold">
-                    <span>Hotel Taxes (12%)</span>
-                    <span>₹{Math.round(checkoutRoom.price_per_night * 0.12).toLocaleString('en-IN')}</span>
-                  </div>
-                  <div className="flex justify-between mb-4 text-sm text-primary font-bold">
-                    <span>Restaurant Charges</span>
-                    <span className={restaurantTab > 0 ? "text-secondary font-black" : "text-primary/50"}>
-                      {isFetchingTab ? 'Loading...' : `₹${Number(restaurantTab).toLocaleString('en-IN')}`}
-                    </span>
-                  </div>
-                  <div className="w-full h-px bg-outline-variant/40 my-6"></div>
-                  <div className="flex justify-between text-2xl font-black text-primary font-headline items-center">
-                    <span>Total Due</span>
-                    <span className="text-emerald-600 text-3xl">₹{(Math.round(checkoutRoom.price_per_night * 1.12) + Number(restaurantTab)).toLocaleString('en-IN')}</span>
-                  </div>
+                <div className="bg-surface-variant/40 rounded-2xl p-6 mb-6 border border-outline-variant/20 shadow-inner">
+                  {isFetchingTab ? (
+                    <p className="text-center font-bold text-primary/50 py-4">Loading breakdown...</p>
+                  ) : previewData ? (
+                    /* Feature 2: Detailed preview from API */
+                    <>
+                      {previewData.guest && (
+                        <div className="mb-4 pb-4 border-b border-outline-variant/20">
+                          <p className="text-xs font-bold uppercase text-primary/50 mb-1">Guest</p>
+                          <p className="font-black text-primary">{previewData.guest.name}</p>
+                          {previewData.guest.phone && <p className="text-xs text-primary/60">{previewData.guest.phone}</p>}
+                        </div>
+                      )}
+                      <div className="flex justify-between mb-3 text-sm text-primary font-bold">
+                        <span>Room Rate × {previewData.breakdown.nights} night(s)</span>
+                        <span>₹{Math.round(previewData.breakdown.room_subtotal).toLocaleString('en-IN')}</span>
+                      </div>
+                      <div className="flex justify-between mb-3 text-sm text-primary font-bold">
+                        <span>Room GST (12%)</span>
+                        <span>₹{Math.round(previewData.breakdown.room_tax).toLocaleString('en-IN')}</span>
+                      </div>
+                      {previewData.breakdown.food_orders?.length > 0 && (
+                        <>
+                          <p className="text-xs font-bold uppercase text-primary/50 mt-4 mb-2">Restaurant Orders</p>
+                          {previewData.breakdown.food_orders.map((fo: any) => (
+                            <div key={fo.order_id} className="flex justify-between mb-2 text-sm text-primary/80 font-medium">
+                              <span>Order #{fo.order_id} ({fo.order_type || 'dine-in'})</span>
+                              <span className={fo.status === 'Unpaid' ? 'text-secondary font-black' : 'text-primary/50'}>₹{Number(fo.total_amount).toLocaleString('en-IN')}</span>
+                            </div>
+                          ))}
+                          <div className="flex justify-between mb-3 text-sm text-primary font-bold">
+                            <span>Food GST (5%)</span>
+                            <span>₹{Math.round(previewData.breakdown.food_tax).toLocaleString('en-IN')}</span>
+                          </div>
+                        </>
+                      )}
+                      {previewData.breakdown.hall_bookings?.length > 0 && (
+                        <>
+                          <p className="text-xs font-bold uppercase text-primary/50 mt-4 mb-2">Hall Bookings</p>
+                          {previewData.breakdown.hall_bookings.map((h: any) => (
+                            <div key={h.hall_booking_id} className="flex justify-between mb-2 text-sm text-primary/80 font-medium">
+                              <span>{h.time_slot} — {new Date(h.event_date).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })}</span>
+                              <span>₹{Number(h.flat_fee).toLocaleString('en-IN')}</span>
+                            </div>
+                          ))}
+                        </>
+                      )}
+                      <div className="w-full h-px bg-outline-variant/40 my-5"></div>
+                      <div className="flex justify-between text-2xl font-black text-primary font-headline items-center">
+                        <span>Grand Total</span>
+                        <span className="text-emerald-600 text-3xl">₹{Math.round(previewData.breakdown.grand_total).toLocaleString('en-IN')}</span>
+                      </div>
+                    </>
+                  ) : (
+                    /* Fallback simple view */
+                    <>
+                      <div className="flex justify-between mb-4 text-sm text-primary font-bold">
+                        <span>Base Rate (1 Night)</span>
+                        <span>₹{Number(checkoutRoom.price_per_night).toLocaleString('en-IN')}</span>
+                      </div>
+                      <div className="flex justify-between mb-4 text-sm text-primary font-bold">
+                        <span>Hotel Taxes (12%)</span>
+                        <span>₹{Math.round(checkoutRoom.price_per_night * 0.12).toLocaleString('en-IN')}</span>
+                      </div>
+                      <div className="flex justify-between mb-4 text-sm text-primary font-bold">
+                        <span>Restaurant Charges</span>
+                        <span className={restaurantTab > 0 ? 'text-secondary font-black' : 'text-primary/50'}>₹{Number(restaurantTab).toLocaleString('en-IN')}</span>
+                      </div>
+                      <div className="w-full h-px bg-outline-variant/40 my-6"></div>
+                      <div className="flex justify-between text-2xl font-black text-primary font-headline items-center">
+                        <span>Total Due</span>
+                        <span className="text-emerald-600 text-3xl">₹{(Math.round(checkoutRoom.price_per_night * 1.12) + Number(restaurantTab)).toLocaleString('en-IN')}</span>
+                      </div>
+                    </>
+                  )}
                 </div>
 
-                <button 
-                  onClick={handleProcessCheckout}
-                  disabled={isCheckingOut || isFetchingTab}
-                  className="w-full py-4 bg-primary hover:bg-primary-container text-white font-bold tracking-widest uppercase rounded-2xl flex justify-center items-center gap-2 transition-all shadow-xl disabled:opacity-50 active:scale-95"
-                >
-                  <span className="material-symbols-outlined">receipt_long</span>
-                  {isCheckingOut ? 'Processing...' : 'Process Payment'}
-                </button>
+                {checkoutStep === 'preview' ? (
+                  <button 
+                    onClick={() => setCheckoutStep('confirm')}
+                    disabled={isFetchingTab}
+                    className="w-full py-4 bg-secondary hover:bg-secondary-container text-white font-bold tracking-widest uppercase rounded-2xl flex justify-center items-center gap-2 transition-all shadow-xl disabled:opacity-50 active:scale-95"
+                  >
+                    <span className="material-symbols-outlined">arrow_forward</span>
+                    Proceed to Payment
+                  </button>
+                ) : (
+                  <div className="flex gap-3">
+                    <button 
+                      onClick={() => setCheckoutStep('preview')}
+                      className="flex-1 py-4 bg-surface-variant text-primary font-bold tracking-widest uppercase rounded-2xl hover:bg-outline-variant/30 transition-all"
+                    >
+                      Back
+                    </button>
+                    <button 
+                      onClick={handleProcessCheckout}
+                      disabled={isCheckingOut}
+                      className="flex-1 py-4 bg-primary hover:bg-primary-container text-white font-bold tracking-widest uppercase rounded-2xl flex justify-center items-center gap-2 transition-all shadow-xl disabled:opacity-50 active:scale-95"
+                    >
+                      <span className="material-symbols-outlined">receipt_long</span>
+                      {isCheckingOut ? 'Processing...' : 'Confirm & Pay'}
+                    </button>
+                  </div>
+                )}
               </>
             ) : (
               // --- SUCCESS & PRINT VIEW ---
@@ -335,7 +442,7 @@ export const Dashboard: React.FC = () => {
                     Print / Save PDF
                   </button>
                   <button 
-                    onClick={() => { setCheckoutRoom(null); setCheckoutSuccess(false); setFinalInvoiceData(null); }}
+                    onClick={() => { setCheckoutRoom(null); setCheckoutSuccess(false); setFinalInvoiceData(null); setPreviewData(null); setCheckoutStep('preview'); }}
                     className="flex-1 py-4 bg-surface-variant text-primary font-bold tracking-widest uppercase rounded-2xl hover:bg-outline-variant/30 transition-all"
                   >
                     Done

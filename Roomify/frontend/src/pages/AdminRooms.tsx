@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Edit, Plus, Trash2, X } from 'lucide-react';
+import { Edit, Plus, Trash2, X, ChevronDown } from 'lucide-react';
 import { API_BASE_URL } from '../config/api';
 import { readApiResponse } from '../utils/apiResponse';
 
@@ -92,14 +92,38 @@ export const AdminRooms: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [togglingId, setTogglingId] = useState<number | null>(null);
 
-  const visibleRooms = useMemo(
-    () =>
-      [...rooms].sort((a, b) =>
-        String(a.room_number).localeCompare(String(b.room_number), undefined, { numeric: true })
-      ),
-    [rooms]
-  );
+  // --- Feature 5: Search & Filter state ---
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('All');
+  const [typeFilter, setTypeFilter] = useState('All');
+
+  const visibleRooms = useMemo(() => {
+    let filtered = [...rooms];
+
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase();
+      filtered = filtered.filter(
+        r =>
+          r.room_number.toLowerCase().includes(term) ||
+          r.title.toLowerCase().includes(term) ||
+          r.type.toLowerCase().includes(term)
+      );
+    }
+
+    if (statusFilter !== 'All') {
+      filtered = filtered.filter(r => r.status.toLowerCase() === statusFilter.toLowerCase());
+    }
+
+    if (typeFilter !== 'All') {
+      filtered = filtered.filter(r => r.type === typeFilter);
+    }
+
+    return filtered.sort((a, b) =>
+      String(a.room_number).localeCompare(String(b.room_number), undefined, { numeric: true })
+    );
+  }, [rooms, searchTerm, statusFilter, typeFilter]);
 
   const updateForm = <Key extends keyof RoomForm>(key: Key, value: RoomForm[Key]) => {
     setForm((current) => ({ ...current, [key]: value }));
@@ -224,6 +248,45 @@ export const AdminRooms: React.FC = () => {
     }
   };
 
+  // --- Feature 4: Quick Status Toggle ---
+  const handleQuickStatusToggle = async (room: Room, newStatus: string) => {
+    if (newStatus === room.status) return;
+    setTogglingId(room.room_id);
+    setError('');
+
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_BASE_URL}/api/rooms/${room.room_id}`, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          room_number: room.room_number,
+          type: room.type,
+          price_per_night: room.price_per_night,
+          status: newStatus
+        })
+      });
+      const data = await readApiResponse<{ message?: string }>(response);
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to update status.');
+      }
+
+      // Optimistic local update
+      setRooms(current =>
+        current.map(r => (r.room_id === room.room_id ? { ...r, status: newStatus } : r))
+      );
+    } catch (toggleError) {
+      const message = toggleError instanceof Error ? toggleError.message : 'Failed to update status.';
+      setError(message);
+    } finally {
+      setTogglingId(null);
+    }
+  };
+
   return (
     <div className="flex-1 overflow-y-auto rounded-3xl border border-white/60 bg-white/40 p-6 shadow-2xl backdrop-blur-3xl h-[85vh] lg:p-10">
       <div className="mb-8 flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
@@ -240,6 +303,39 @@ export const AdminRooms: React.FC = () => {
           <Plus className="h-5 w-5" />
           Add New Room
         </button>
+      </div>
+
+      {/* --- Feature 5: Search & Filters --- */}
+      <div className="mb-5 flex flex-col md:flex-row gap-3">
+        <div className="relative flex-1">
+          <input
+            type="text"
+            placeholder="Search by room number, title, or type..."
+            value={searchTerm}
+            onChange={e => setSearchTerm(e.target.value)}
+            className="w-full rounded-xl border border-primary/10 bg-white/60 pl-4 pr-4 py-3 text-sm font-medium text-primary placeholder:text-primary/40 outline-none focus:ring-2 focus:ring-secondary/30 shadow-sm transition-all"
+          />
+        </div>
+        <select
+          value={statusFilter}
+          onChange={e => setStatusFilter(e.target.value)}
+          className="rounded-xl border border-primary/10 bg-white/60 px-4 py-3 text-sm font-bold text-primary outline-none"
+        >
+          <option value="All">All Statuses</option>
+          {roomStatuses.map(s => (
+            <option key={s} value={s}>{s}</option>
+          ))}
+        </select>
+        <select
+          value={typeFilter}
+          onChange={e => setTypeFilter(e.target.value)}
+          className="rounded-xl border border-primary/10 bg-white/60 px-4 py-3 text-sm font-bold text-primary outline-none"
+        >
+          <option value="All">All Types</option>
+          {roomTypes.map(t => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
       </div>
 
       {error && (
@@ -271,7 +367,9 @@ export const AdminRooms: React.FC = () => {
               ) : visibleRooms.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="p-8 text-center font-bold text-primary/60">
-                    No rooms yet. Add one and it will appear on the public homepage.
+                    {rooms.length === 0
+                      ? 'No rooms yet. Add one and it will appear on the public homepage.'
+                      : 'No rooms match your filters.'}
                   </td>
                 </tr>
               ) : (
@@ -307,11 +405,24 @@ export const AdminRooms: React.FC = () => {
                     </td>
                     <td className="p-5 font-bold text-primary">{room.capacity} guests</td>
                     <td className="p-5 font-bold text-secondary">Rs {room.price_per_night.toLocaleString('en-IN')}</td>
+
+                    {/* --- Feature 4: Inline Status Toggle --- */}
                     <td className="p-5">
-                      <span className={`rounded-full px-3 py-1 text-xs font-bold ${statusClasses(room.status)}`}>
-                        {room.status.toUpperCase()}
-                      </span>
+                      <div className="relative inline-block">
+                        <select
+                          value={room.status}
+                          onChange={e => handleQuickStatusToggle(room, e.target.value)}
+                          disabled={togglingId === room.room_id}
+                          className={`appearance-none rounded-full pl-3 pr-8 py-1.5 text-xs font-bold cursor-pointer border-0 outline-none transition-all ${statusClasses(room.status)} ${togglingId === room.room_id ? 'opacity-50' : ''}`}
+                        >
+                          {roomStatuses.map(s => (
+                            <option key={s} value={s}>{s.toUpperCase()}</option>
+                          ))}
+                        </select>
+                        <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 h-3 w-3 pointer-events-none" />
+                      </div>
                     </td>
+
                     <td className="p-5">
                       <div className="flex justify-end gap-3">
                         <button
