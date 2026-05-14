@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Calendar, BedDouble, Filter, Plus } from 'lucide-react';
+import { Search,  Plus } from 'lucide-react';
 import { API_BASE_URL } from '../config/api';
 
 const roomTypes = ['Standard', 'Deluxe', 'Suite', 'Premium', 'Family', 'Luxury'];
