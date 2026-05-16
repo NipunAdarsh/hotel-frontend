@@ -16,15 +16,12 @@ interface Message {
   ts: number;
 }
 
-// Groq uses the OpenAI-compatible chat format
-interface GroqMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
-}
-
-interface GroqResponse {
-  choices?: { message: { content: string } }[];
-  error?: { message: string };
+// Gemini REST API types
+interface GeminiPart { text: string; }
+interface GeminiContent { role: 'user' | 'model'; parts: GeminiPart[]; }
+interface GeminiResponse {
+  candidates?: { content: { parts: GeminiPart[] } }[];
+  error?: { message: string; code?: number };
 }
 
 // ─── System Prompt ───────────────────────────────────────────────────────────
@@ -175,49 +172,43 @@ HARD RULES
 
 // ─── Gemini API helper ───────────────────────────────────────────────────────
 
-// Groq free tier: 30 RPM, 6,000 tokens/min, 500,000 tokens/day
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_MODEL   = 'llama-3.3-70b-versatile';
+// gemini-1.5-flash — generous free tier (15 RPM, 1 M tokens/day)
+const GEMINI_API_URL =
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
 
-async function callGroq(history: Message[]): Promise<string> {
-  const apiKey = import.meta.env.VITE_GROQ_API_KEY as string | undefined;
+async function callGemini(history: Message[]): Promise<string> {
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
 
-  if (!apiKey || apiKey === 'YOUR_GROQ_API_KEY_HERE') {
+  if (!apiKey || apiKey === 'YOUR_GEMINI_API_KEY_HERE') {
     throw new Error('MISSING_KEY');
   }
 
-  // Map internal messages → OpenAI-compatible format
-  // ('model' role → 'assistant' role for Groq)
-  const messages: GroqMessage[] = [
-    { role: 'system', content: SYSTEM_PROMPT },
-    ...history.map((msg) => ({
-      role: (msg.role === 'model' ? 'assistant' : 'user') as GroqMessage['role'],
-      content: msg.text,
-    })),
-  ];
+  // Build multi-turn history for Gemini
+  const contents: GeminiContent[] = history.map((msg) => ({
+    role: msg.role, // 'user' | 'model' — matches Gemini's expected values
+    parts: [{ text: msg.text }],
+  }));
 
-  const res = await fetch(GROQ_API_URL, {
+  const payload = {
+    system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+    contents,
+    generationConfig: { temperature: 0.7, maxOutputTokens: 800 },
+  };
+
+  const res = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: GROQ_MODEL,
-      messages,
-      temperature: 0.7,
-      max_tokens: 800,
-    }),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
   });
 
-  const data: GroqResponse = await res.json();
+  const data: GeminiResponse = await res.json();
 
   if (!res.ok || data.error) {
-    throw new Error(data.error?.message ?? `Groq API error ${res.status}`);
+    throw new Error(data.error?.message ?? `Gemini API error ${res.status}`);
   }
 
-  const text = data.choices?.[0]?.message?.content;
-  if (!text) throw new Error('Empty response from Groq.');
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error('Empty response from Gemini.');
   return text;
 }
 
@@ -291,16 +282,16 @@ export const AiConcierge: React.FC<AiConciergeProps> = ({ embedded = false }) =>
         ...messages,
         { id: 'tmp', role: 'user', text: trimmed, ts: Date.now() },
       ];
-      const reply = await callGroq(history);
+      const reply = await callGemini(history);
       addMessage('model', reply);
     } catch (err) {
       const e = err as Error;
       if (e.message === 'MISSING_KEY') {
-        setError('API key not set — open .env, add your VITE_GROQ_API_KEY, then restart the dev server.');
-      } else if (/rate.?limit|429|quota/i.test(e.message)) {
-        setError('Aria is resting — free-tier rate limit reached. Please wait a moment and try again.');
+        setError('API key not set — open .env, add your VITE_GEMINI_API_KEY, then restart the dev server.');
+      } else if (/quota|rate.?limit|429/i.test(e.message)) {
+        setError('Aria is resting — free-tier limit reached. Please wait a moment and try again.');
       } else {
-        setError(`Aria couldn't respond: ${e.message}`);
+        setError(`Aria couldn’t respond right now. Please try again in a moment.`);
       }
     } finally {
       setLoading(false);
@@ -478,7 +469,7 @@ export const AiConcierge: React.FC<AiConciergeProps> = ({ embedded = false }) =>
           </button>
         </div>
         <p className="mt-2 text-center text-[10px] font-bold text-white/20">
-          Powered by Groq · Llama 3.3 · Paramvah Stays AI
+          Powered by Gemini · Paramvah Stays AI
         </p>
       </div>
     </div>
