@@ -87,6 +87,8 @@ interface Invoice {
   invoice_no: string;
   room_total: string | number;
   restaurant_total: string | number;
+  addon_total?: string | number;
+  addon_items?: string | null;
   grand_total: string | number;
   payment_status: string;
   check_in: string;
@@ -182,6 +184,184 @@ const formatDate = (value: string) =>
     year: 'numeric'
   });
 
+const escapePdfText = (value: string | number) =>
+  String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/\(/g, '\\(')
+    .replace(/\)/g, '\\)');
+
+const parseInvoiceAddons = (invoice: Invoice) => {
+  if (!invoice.addon_items) return [];
+
+  return invoice.addon_items
+    .split('||')
+    .map((item) => {
+      const [title, price] = item.split('::');
+      return {
+        title: title || 'Booking add-on',
+        price: Number(price || 0)
+      };
+    })
+    .filter((item) => item.price > 0);
+};
+
+const downloadInvoice = (invoice: Invoice) => {
+  const fileName = `${invoice.invoice_no}.pdf`;
+  const generatedAt = new Date().toLocaleString('en-IN', {
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  });
+
+  const text = (x: number, y: number, size: number, value: string | number, font = 'F1') =>
+    `BT /${font} ${size} Tf ${x} ${y} Td (${escapePdfText(value)}) Tj ET`;
+  const hline = (y: number) => `64 ${y} m 531 ${y} l S`;
+
+  const addons = parseInvoiceAddons(invoice);
+  const restTotal = Number(invoice.restaurant_total || 0);
+  const addonTotalVal = Number(invoice.addon_total || 0);
+
+  // Fixed layout - always fits on one A4 page (842pt tall)
+  const ops: string[] = [];
+
+  // Header band
+  ops.push('0.06 0.06 0.05 rg');
+  ops.push('64 700 468 80 re f');
+  ops.push('0.85 0.72 0.42 rg');
+  ops.push(text(76, 748, 28, 'INVOICE', 'F2'));
+  ops.push('1 1 1 rg');
+  ops.push(text(76, 726, 10, 'Paramvah Stays'));
+  ops.push('0.85 0.72 0.42 rg');
+  ops.push(text(390, 748, 10, invoice.payment_status, 'F2'));
+  ops.push('0.75 0.75 0.75 rg');
+  ops.push(text(390, 730, 9, invoice.invoice_no));
+
+  // Info boxes
+  ops.push('0.12 0.12 0.10 rg');
+  ops.push('64 620 220 68 re f');
+  ops.push('312 620 220 68 re f');
+  ops.push('64 540 220 68 re f');
+  ops.push('312 540 220 68 re f');
+
+  ops.push('0.85 0.72 0.42 rg');
+  ops.push(text(76, 676, 7, 'ROOM NUMBER', 'F2'));
+  ops.push(text(324, 676, 7, 'STAY DATES', 'F2'));
+  ops.push(text(76, 596, 7, 'INVOICE DATE', 'F2'));
+  ops.push(text(324, 596, 7, 'BOOKING REF', 'F2'));
+
+  ops.push('0.95 0.93 0.88 rg');
+  ops.push(text(76, 658, 13, `Room ${invoice.room_number} (${invoice.room_type})`, 'F2'));
+  ops.push(text(324, 658, 10, `${formatDate(invoice.check_in)}`, 'F2'));
+  ops.push(text(324, 644, 10, `to ${formatDate(invoice.check_out)}`, 'F2'));
+  ops.push(text(76, 578, 10, generatedAt, 'F2'));
+  ops.push(text(324, 578, 13, `BK-${String(invoice.booking_id).padStart(4, '0')}`, 'F2'));
+
+  // Charges table header
+  ops.push('0.85 0.72 0.42 RG');
+  ops.push('1 w');
+  ops.push(hline(522));
+  ops.push('0.85 0.72 0.42 rg');
+  ops.push(text(64, 506, 9, 'DESCRIPTION', 'F2'));
+  ops.push(text(460, 506, 9, 'AMOUNT', 'F2'));
+  ops.push('0.85 0.72 0.42 RG');
+  ops.push(hline(497));
+
+  let rowY = 476;
+  const ROW_H = 32;
+
+  // Room charges
+  ops.push('0.92 0.90 0.85 rg');
+  ops.push(text(64, rowY, 11, 'Room charges (incl. taxes)'));
+  ops.push(text(430, rowY, 11, `Rs ${formatCurrency(invoice.room_total)}`, 'F2'));
+  rowY -= ROW_H;
+  ops.push('0.20 0.20 0.18 RG');
+  ops.push(hline(rowY + 18));
+
+  // Restaurant charges
+  ops.push('0.92 0.90 0.85 rg');
+  ops.push(text(64, rowY, 11, 'Restaurant & room service'));
+  ops.push(text(430, rowY, 11, restTotal > 0 ? `Rs ${formatCurrency(restTotal)}` : 'Rs 0', 'F2'));
+  rowY -= ROW_H;
+  ops.push('0.20 0.20 0.18 RG');
+  ops.push(hline(rowY + 18));
+
+  // Addon rows (max 3)
+  const displayAddons = addons.slice(0, 3);
+  for (const addon of displayAddons) {
+    ops.push('0.92 0.90 0.85 rg');
+    ops.push(text(64, rowY, 11, addon.title));
+    ops.push(text(430, rowY, 11, `Rs ${formatCurrency(addon.price)}`, 'F2'));
+    rowY -= ROW_H;
+    ops.push('0.20 0.20 0.18 RG');
+    ops.push(hline(rowY + 18));
+  }
+
+  // Fallback addon line if total > 0 but no parsed items
+  if (displayAddons.length === 0 && addonTotalVal > 0) {
+    ops.push('0.92 0.90 0.85 rg');
+    ops.push(text(64, rowY, 11, 'Booking add-ons'));
+    ops.push(text(430, rowY, 11, `Rs ${formatCurrency(addonTotalVal)}`, 'F2'));
+    rowY -= ROW_H;
+    ops.push('0.20 0.20 0.18 RG');
+    ops.push(hline(rowY + 18));
+  }
+
+  // Grand total box
+  const totalBoxY = Math.max(rowY - 12, 100);
+  ops.push('0.06 0.06 0.05 rg');
+  ops.push(`64 ${totalBoxY} 468 44 re f`);
+  ops.push('0.85 0.72 0.42 rg');
+  ops.push(text(76, totalBoxY + 15, 13, 'GRAND TOTAL', 'F2'));
+  ops.push(text(370, totalBoxY + 15, 16, `Rs ${formatCurrency(invoice.grand_total)}`, 'F2'));
+
+  // Footer
+  ops.push('0.50 0.50 0.50 rg');
+  ops.push(text(64, Math.max(totalBoxY - 28, 50), 8, 'Thank you for staying with Paramvah Stays. This is a computer-generated invoice.'));
+
+  const contentStr = ops.join('\n');
+
+  // CRITICAL: use byte length not JS string char length for PDF /Length
+  const encoder = new TextEncoder();
+  const contentBytes = encoder.encode(contentStr);
+  const contentLength = contentBytes.length;
+
+  const obj1 = '<< /Type /Catalog /Pages 2 0 R >>';
+  const obj2 = '<< /Type /Pages /Kids [3 0 R] /Count 1 >>';
+  const obj3 = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>';
+  const obj4 = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
+  const obj5 = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
+  const obj6 = `<< /Length ${contentLength} >>\nstream\n${contentStr}\nendstream`;
+  const objs = [obj1, obj2, obj3, obj4, obj5, obj6];
+
+  let pdf = '%PDF-1.4\n';
+  const offsets: number[] = [];
+  objs.forEach((obj, i) => {
+    offsets.push(pdf.length);
+    pdf += `${i + 1} 0 obj\n${obj}\nendobj\n`;
+  });
+
+  const xrefOffset = pdf.length;
+  pdf += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
+  offsets.forEach((off) => {
+    pdf += `${String(off).padStart(10, '0')} 00000 n \n`;
+  });
+  pdf += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+
+  const blob = new Blob([pdf], { type: 'application/pdf' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+};
+
+const isCheckInAfterOrSameAsCheckOut = (checkIn: string, checkOut: string) => {
+  if (!checkIn || !checkOut) return false;
+  return new Date(checkIn).getTime() >= new Date(checkOut).getTime();
+};
+
 const getDateInputValue = (offsetDays: number) => {
   const date = new Date();
   date.setDate(date.getDate() + offsetDays);
@@ -250,12 +430,6 @@ export const UserPortal: React.FC = () => {
     setStatusMsg('');
 
     try {
-      const dateParams = new URLSearchParams({
-        check_in: bookingDates.check_in,
-        check_out: bookingDates.check_out
-
-      });
-      navigate(`/rooms?${dateParams.toString()}`);
       const [profileResponse, bookingsResponse, membershipResponse, invoicesResponse, preferencesResponse] =
         await Promise.all([
           fetch(`${API_BASE_URL}/api/user/profile`, { headers: authHeaders() }),
@@ -498,6 +672,13 @@ export const UserPortal: React.FC = () => {
       return;
     }
 
+    if (isCheckInAfterOrSameAsCheckOut(bookingDates.check_in, bookingDates.check_out)) {
+      const message = 'Check-in date cannot be after the check-out date.';
+      setStatusMsg(message);
+      window.alert(message);
+      return;
+    }
+
     setIsWorking(true);
     setStatusMsg('');
 
@@ -542,6 +723,13 @@ export const UserPortal: React.FC = () => {
   const handleRebook = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!rebooking) return;
+
+    if (isCheckInAfterOrSameAsCheckOut(bookingDates.check_in, bookingDates.check_out)) {
+      const message = 'Check-in date cannot be after the check-out date.';
+      setStatusMsg(message);
+      window.alert(message);
+      return;
+    }
 
     setIsWorking(true);
     setStatusMsg('');
@@ -1409,7 +1597,7 @@ const BillingCard: React.FC<{ invoices: Invoice[] }> = ({ invoices }) => (
                 Room {invoice.room_number} - Rs {formatCurrency(invoice.grand_total)} - {invoice.payment_status}
               </p>
             </div>
-            <button className="rounded-full bg-white/10 p-2 text-[#e7c987]" aria-label={`Download ${invoice.invoice_no}`}>
+            <button onClick={() => downloadInvoice(invoice)} className="rounded-full bg-white/10 p-2 text-[#e7c987] hover:bg-white/20 transition-all" aria-label={`Download ${invoice.invoice_no}`}>
               <Download className="h-4 w-4" />
             </button>
           </div>
